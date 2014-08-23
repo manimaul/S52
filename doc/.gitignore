@@ -1,3 +1,8 @@
 CVS
 .cvsignore
 tmp
+cvs_status.*
+*.o
+*.a
+tags
+
