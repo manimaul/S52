@@ -1,3 +1,6 @@
 CVS
 .cvsignore
 cvs_status.*
+*.o
+*.a
+tags
