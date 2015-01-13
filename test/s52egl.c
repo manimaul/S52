@@ -4,7 +4,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2012 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -46,6 +46,11 @@
 
 //extern GMemVTable *glib_mem_profiler_table;
 
+#define DEG_TO_RAD     0.01745329238
+#define RAD_TO_DEG    57.29577951308232
+#define INCH2MM       25.4
+
+
 #ifdef S52_USE_ANDROID
 #include <jni.h>
 #include <errno.h>
@@ -69,16 +74,11 @@
 #define  LOGE(...)  __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define  g_print    g_message
 
-
 //#include <glib-android/glib-android.h>  // g_android_init()
-
-#define DEG_TO_RAD     0.01745329238
-#define RAD_TO_DEG    57.29577951308232
-#define INCH2MM       25.4
 
 #define PATH     "/sdcard/s52droid"      // Android 4.2
 #define PLIB     PATH "/PLAUX_00.DAI"
-#define COLS     PATH "/plib_COLS-3.4.1.rle"
+#define COLS     PATH "/plib_COLS-3.4-a.rle"
 #define GPS      PATH "/bin/sl4agps"
 #define AIS      PATH "/bin/s52ais"
 #define PID           ".pid"
@@ -88,35 +88,41 @@
 
 #define  PATH "/home/sduclos/dev/gis/data"
 #define  PLIB "PLAUX_00.DAI"
-#define  COLS "plib_COLS-3.4.1.rle"
+#define  COLS "plib_COLS-3.4-a.rle"
 #define  LOGI(...)   g_print(__VA_ARGS__)
 #define  LOGE(...)   g_print(__VA_ARGS__)
 
-static int _drawVRMEBLtxt = FALSE;  // ebline draw text flag in X11
+// ebline draw flag in X11 (F4 toggle ON/OFF)
+//static int _drawVRMEBL = TRUE;
+static int _drawVRMEBL = FALSE;
 
 #endif  // S52_USE_ANDROID
 
 // test - St-Laurent Ice Route
-static S52ObjectHandle _waypnt1 = NULL;
-static S52ObjectHandle _waypnt2 = NULL;
-static S52ObjectHandle _waypnt3 = NULL;
-static S52ObjectHandle _waypnt4 = NULL;
+static S52ObjectHandle _waypnt1 = FALSE;
+static S52ObjectHandle _waypnt2 = FALSE;
+static S52ObjectHandle _waypnt3 = FALSE;
+static S52ObjectHandle _waypnt4 = FALSE;
 
-static S52ObjectHandle _leglin1 = NULL;
-static S52ObjectHandle _leglin2 = NULL;
-static S52ObjectHandle _leglin3 = NULL;
+static S52ObjectHandle _leglin1 = FALSE;
+static S52ObjectHandle _leglin2 = FALSE;
+static S52ObjectHandle _leglin3 = FALSE;
+static S52ObjectHandle _leglin4 = FALSE;
+
+// lat/lon/begin/end
+static double _leglin4xy[2*2];
 
 // test - VRMEBL
 // S52 object name:"ebline"
-static S52ObjectHandle _vrmeblA       = NULL;
+static S52ObjectHandle _vrmeblA = FALSE;
 
 // test - cursor DISP 9 (instead of IHO PLib DISP 8)
 // need to load PLAUX
 // S52 object name:"ebline"
-static S52ObjectHandle _cursor2 = NULL;
+static S52ObjectHandle _cursor2 = FALSE;  // 2 - open cursor
 
 // test - centroid
-static S52ObjectHandle _prdare = NULL;
+static S52ObjectHandle _prdare  = FALSE;
 
 
 // FIXME: mutex this share data
@@ -627,7 +633,7 @@ static int      _egl_init       (s52engine *engine)
         //wa.colormap         = XCreateColormap(display, RootWindow(display, screen), NULL, AllocNone);
         wa.background_pixel = 0xFFFFFFFF;
         wa.border_pixel     = 0;
-        wa.event_mask       = ExposureMask | StructureNotifyMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask;
+        wa.event_mask       = ExposureMask | StructureNotifyMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
 
         window = XCreateWindow(display, RootWindow(display, screen), 0, 0, 1280, 1024,
                                0, visual->depth, InputOutput, visual->visual, mask, &wa);
@@ -951,7 +957,7 @@ static int      _s52_setupOWNSHP(s52droid_state_t *state)
 }
 #endif  // USE_FAKE_AIS
 
-static int      _s52_setupLEGLIN(void)
+static int      _s52_setupIceRoute(void)
 {
 /*
 
@@ -987,7 +993,6 @@ route normale de navigation.
         double x,y,z;
     } WPxyz_t;
 
-    //*
     WPxyz_t WPxyz[4] = {
         {-69.33333, 48.33333, 0.0},  // WP1 - ALPHA
         {-68.5,     48.78333, 0.0},  // WP2 - BRAVO
@@ -997,13 +1002,7 @@ route normale de navigation.
         //{-66.5,     49.0,     0.0}   // WP4 - test horizontal dot
         //{-66.0,     49.5,     0.0}   // WP4 - test vertical dot
     };
-    //*/
-    /*
-    WPxyz_t WPxyz[4] = {
-        {-69.33333, 48.33333, 0.0},  // WP1 - ALPHA
-        {-66.5,     49.5,     0.0}   // WP2 - BRAVO
-    };
-    */
+
     char attVal1[] = "select:2,OBJNAM:ALPHA";    // waypoint on alternate planned route
     char attVal2[] = "select:2,OBJNAM:BRAVO";    // waypoint on alternate planned route
     char attVal3[] = "select:2,OBJNAM:CHARLIE";  // waypoint on alternate planned route
@@ -1014,12 +1013,15 @@ route normale de navigation.
     _waypnt3 = S52_newMarObj("waypnt", S52_POINT, 1, (double*)&WPxyz[2], attVal3);
     _waypnt4 = S52_newMarObj("waypnt", S52_POINT, 1, (double*)&WPxyz[3], attVal4);
 
+    // need to turn OFF guard zone because projection not set yet (set via S52_draw())
+    double gz = S52_getMarinerParam(S52_MAR_GUARDZONE_BEAM);
+    S52_setMarinerParam(S52_MAR_GUARDZONE_BEAM, 0.0);  // trun off
 #define ALT_RTE 2
     // select: alternate (2) legline for Ice Route 2012-02-12T21:00:00Z
-    _leglin1 = S52_newLEGLIN(ALT_RTE, 0.0, 0.0, WPxyz[0].y, WPxyz[0].x, WPxyz[1].y, WPxyz[1].x, NULL);
+    _leglin1 = S52_newLEGLIN(ALT_RTE, 0.0, 0.0, WPxyz[0].y, WPxyz[0].x, WPxyz[1].y, WPxyz[1].x, FALSE);
     _leglin2 = S52_newLEGLIN(ALT_RTE, 0.0, 0.0, WPxyz[1].y, WPxyz[1].x, WPxyz[2].y, WPxyz[2].x, _leglin1);
     _leglin3 = S52_newLEGLIN(ALT_RTE, 0.0, 0.0, WPxyz[2].y, WPxyz[2].x, WPxyz[3].y, WPxyz[3].x, _leglin2);
-    //_leglin4 = S52_newLEGLIN(ALT_RTE, 0.0, 0.0, WPxyz[3].y, WPxyz[3].x, WPxyz[4].y, WPxyz[4].x, _leglin3);
+    S52_setMarinerParam(S52_MAR_GUARDZONE_BEAM, gz);  // trun on
 
     /*
     {// test wholin
@@ -1032,10 +1034,57 @@ route normale de navigation.
     return TRUE;
 }
 
+static int      _s52_setupLEGLIN(s52droid_state_t *state)
+{
+    (void) state;
+
+    if (FALSE != _leglin4) {
+        _leglin4 = S52_delMarObj(_leglin4);
+        if (FALSE != _leglin4) {
+            LOGI("s52egl:_s52_setupLEGLIN(): delMarObj _leglin4 failed\n");
+            g_assert(0);
+        }
+        // clear error
+        S52_setMarinerParam(S52_MAR_ERROR, 0.0);
+    }
+
+    // test vertical route on DEPCNT
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat - 0.02, state->cLon + 0.00, state->cLat + 0.02, state->cLon + 0.00, NULL);
+
+    // oblique / upbound - alarm
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat + 0.01, state->cLon + 0.00, state->cLat + 0.05, state->cLon + 0.02, NULL);
+
+    // oblique - no alarm
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat + 0.02, state->cLon + 0.00, state->cLat + 0.05, state->cLon + 0.02, NULL);
+
+    // oblique \  upbound - alarm
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat - 0.01, state->cLon + 0.00, state->cLat + 0.02, state->cLon - 0.02, NULL);
+
+    // oblique / downbound - alarm
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat + 0.02, state->cLon + 0.02, state->cLat - 0.05, state->cLon - 0.02, NULL);
+
+    // oblique \  downbound - alarm
+    //_leglin4 = S52_newLEGLIN(1, 0.0, 0.0, state->cLat + 0.02, state->cLon - 0.02, state->cLat - 0.02, state->cLon + 0.02, NULL);
+
+
+    // test LEGLIN setup via cursor
+    _leglin4 = S52_newLEGLIN(1, 0.0, 0.0, _leglin4xy[1], _leglin4xy[0], _leglin4xy[3], _leglin4xy[2], FALSE);
+    //if (FALSE == _leglin4) {
+    //    LOGI("s52egl:_s52_setupLEGLIN(): failed\n");
+        if (1.0 == S52_getMarinerParam(S52_MAR_ERROR))
+            LOGI("s52egl:_s52_setupLEGLIN(): ALARM ON\n");
+        if (2.0 == S52_getMarinerParam(S52_MAR_ERROR))
+            LOGI("s52egl:_s52_setupLEGLIN(): INDICATION ON\n");
+    //}
+
+    return TRUE;
+}
+
 static int      _s52_setupVRMEBL(s52droid_state_t *state)
 {
     //char *attVal   = NULL;      // ordinary cursor
-    char  attVal[] = "cursty:2,_cursor_label:0.0N 0.0W";  // open cursor
+    //char  attVal[] = "cursty:2,_cursor_label:0.0N 0.0W";  // open cursor
+    char  attVal[] = "cursty:2";  // open cursor
     double xyz[3] = {state->cLon, state->cLat, 0.0};
     int S52_VRMEBL_vrm = TRUE;
     int S52_VRMEBL_ebl = TRUE;
@@ -1043,19 +1092,22 @@ static int      _s52_setupVRMEBL(s52droid_state_t *state)
     int S52_VRMEBL_ori = TRUE;  // (user) setOrigin
 
     _cursor2 = S52_newMarObj("cursor", S52_POINT, 1, xyz, attVal);
-    //int ret = S52_toggleObjClassOFF("cursor");
-    //LOGE("_s52_setupVRMEBL(): S52_toggleObjClassOFF('cursor'); ret=%i\n", ret);
-    //int ret = S52_toggleObjClassON("cursor");
-    //LOGE("_s52_setupVRMEBL(): S52_toggleObjClassON('cursor'); ret=%i\n", ret);
 
-
-    _vrmeblA = S52_newVRMEBL(S52_VRMEBL_vrm, S52_VRMEBL_ebl, S52_VRMEBL_sty, S52_VRMEBL_ori);
+    //_vrmeblA = S52_newVRMEBL(S52_VRMEBL_vrm, S52_VRMEBL_ebl, S52_VRMEBL_sty, S52_VRMEBL_ori);
+    _vrmeblA = S52_newVRMEBL(!S52_VRMEBL_vrm, S52_VRMEBL_ebl, S52_VRMEBL_sty, S52_VRMEBL_ori);
     //_vrmeblA = S52_newVRMEBL(S52_VRMEBL_vrm, !S52_VRMEBL_ebl, S52_VRMEBL_sty, !S52_VRMEBL_ori);
     //_vrmeblA = S52_newVRMEBL(S52_VRMEBL_vrm, !S52_VRMEBL_ebl, S52_VRMEBL_sty,  S52_VRMEBL_ori);
 
-    S52_toggleObjClassON("cursor");  // suppression ON
-    S52_toggleObjClassON("ebline");
-    S52_toggleObjClassON("vrmark");
+    if (FALSE == _drawVRMEBL) {
+        // suppression ON
+        S52_setS57ObjClassSupp("cursor", TRUE);
+        S52_setS57ObjClassSupp("ebline", TRUE);
+        S52_setS57ObjClassSupp("vrmark", TRUE);
+
+        // or supp one obj
+        //S52_toggleDispMarObj(_cursor2);
+        //S52_toggleDispMarObj(_vrmeblA);
+    }
 
     return TRUE;
 }
@@ -1091,6 +1143,125 @@ static int      _s52_setupPRDARE(s52droid_state_t *state)
     // PRDARE/WNDFRM51/CATPRA9
     char attVal[] = "CATPRA:9";
     _prdare = S52_newMarObj("PRDARE", S52_AREAS, 6, xyzArea,  attVal);
+
+    return TRUE;
+}
+
+static int      _s52_setupMarPar(void)
+{
+    // -- DEPTH COLOR ------------------------------------
+    S52_setMarinerParam(S52_MAR_TWO_SHADES,      0.0);   // 0.0 --> 5 shades
+    //S52_setMarinerParam(S52_MAR_TWO_SHADES,      1.0);   // 1.0 --> 2 shades
+
+    // sounding color
+    //S52_setMarinerParam(S52_MAR_SAFETY_DEPTH,    10.0);
+    S52_setMarinerParam(S52_MAR_SAFETY_DEPTH,    15.0);
+
+
+    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  10.0);
+    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  5.0);       // for triggering symb ISODGR01 (ODD winding) at Rimouski
+    S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  3.0);     // for white chanel in Rimouski
+    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  1.0);
+
+    //S52_setMarinerParam(S52_MAR_SHALLOW_CONTOUR, 10.0);
+    S52_setMarinerParam(S52_MAR_SHALLOW_CONTOUR, 5.0);
+
+    //S52_setMarinerParam(S52_MAR_DEEP_CONTOUR,   11.0);
+    S52_setMarinerParam(S52_MAR_DEEP_CONTOUR,   10.0);
+
+    S52_setMarinerParam(S52_MAR_SHALLOW_PATTERN, 0.0);  // (default off)
+    //S52_setMarinerParam(S52_MAR_SHALLOW_PATTERN, 1.0);  // ON (GPU expentive)
+    // -- DEPTH COLOR ------------------------------------
+
+    S52_setMarinerParam(S52_MAR_SYMBOLIZED_BND, 1.0);  // on (default) [Note: this tax the GPU]
+    //S52_setMarinerParam(S52_MAR_SYMBOLIZED_BND, 0.0);  // off
+
+    S52_setMarinerParam(S52_MAR_SHIPS_OUTLINE,   1.0);
+    S52_setMarinerParam(S52_MAR_HEADNG_LINE,     1.0);
+    S52_setMarinerParam(S52_MAR_BEAM_BRG_NM,     1.0);
+    //S52_setMarinerParam(S52_MAR_FULL_SECTORS,    0.0);    // (default ON)
+
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_BASE);    // always ON
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_STD);     // default
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_OTHER);
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_BASE | S52_MAR_DISP_CATEGORY_STD | S52_MAR_DISP_CATEGORY_OTHER);
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_STD | S52_MAR_DISP_CATEGORY_OTHER);
+    S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_SELECT);
+
+    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_NONE );
+    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_STD );   // default
+    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_OTHER);
+    S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_SELECT);   // All Mariner (Standard(default) + Other)
+
+    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   0.0);     // DAY (default)
+    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   1.0);     // DAY DARK
+    S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   5.0);     // DAY 60 - need plib_COLS-3.4-a.rle
+    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   6.0);     // DUSK 60 - need plib_COLS-3.4-a.rle
+
+    //S52_setMarinerParam(S52_MAR_VECPER,         12.0);  // vecper: Vector-length time-period (min) (normaly 6 or 12)
+    S52_setMarinerParam(S52_MAR_VECMRK,          1.0);  // vecmrk: Vector time-mark interval (0 - none, 1 - 1&6 min, 2 - 6 min)
+    //S52_setMarinerParam(S52_MAR_VECMRK,          2.0);  // vecmrk: Vector time-mark interval (0 - none, 1 - 1&6 min, 2 - 6 min)
+    //S52_setMarinerParam(S52_MAR_VECSTB,          0.0);  // vecstb: Vector Stabilization (0 - none, 1 - ground, 2 - water)
+
+    S52_setMarinerParam(S52_MAR_SCAMIN,          1.0);   // ON (default)
+    //S52_setMarinerParam(S52_MAR_SCAMIN,          0.0);   // debug OFF - show all
+
+    // remove QUAPNT01 symbole (black diagonal and a '?')
+    S52_setMarinerParam(S52_MAR_QUAPNT01,        0.0);   // off
+
+    S52_setMarinerParam(S52_MAR_DISP_CALIB,      1.0);
+
+    // cell's legend
+    //S52_setMarinerParam(S52_MAR_DISP_LEGEND, 1.0);   // show
+    S52_setMarinerParam(S52_MAR_DISP_LEGEND, 0.0);   // hide (default)
+
+    //S52_setMarinerParam(S52_MAR_DISP_DRGARE_PATTERN, 0.0);  // OFF
+    S52_setMarinerParam(S52_MAR_DISP_DRGARE_PATTERN, 1.0);  // ON (default)
+
+    S52_setMarinerParam(S52_MAR_ANTIALIAS,       1.0);   // on
+    //S52_setMarinerParam(S52_MAR_ANTIALIAS,       0.0);     // off
+
+    // trick to force symbole size
+#ifdef S52_USE_TEGRA2
+    // smaller on xoom so that proportion look the same
+    // as a 'normal' screen - since the eye is closer to the 10" screen of the Xoom
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
+#endif
+
+#ifdef S52_USE_ADRENO
+    // Nexus 7 (2013) [~323 ppi]
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.2);
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.2);
+#endif
+
+#if !defined(SET_SCREEN_SIZE) && !defined(S52_USE_ANDROID)
+    // NOTE: S52 pixels for symb are 0.3 mm
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
+    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
+#endif
+
+    // a delay of 0.0 to tell to not delete old AIS (default +600 sec old)
+    //S52_setMarinerParam(S52_MAR_DISP_VESSEL_DELAY, 0.0);
+    // older AIS - case where s52ais reconnect
+    // FIXME: maybe check AIS mmsi, so that same ohjH is used!
+    S52_setMarinerParam(S52_MAR_DISP_VESSEL_DELAY, 700.0);
+
+    //S52_setMarinerParam(S52_MAR_DISP_NODATA_LAYER, 0.0); // debug: no NODATA layer
+    S52_setMarinerParam(S52_MAR_DISP_NODATA_LAYER, 1.0);   // default
+
+    //S52_setMarinerParam(S52_MAR_DISP_AFTERGLOW, 0.0);  // off (default)
+    S52_setMarinerParam(S52_MAR_DISP_AFTERGLOW, 1.0);  // on
+
+    //*
+    // debug - use for timing rendering
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_SY);
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_LS);
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_LC);
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_AC);
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_AP);
+    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_TX);
+    //*/
 
     return TRUE;
 }
@@ -1214,10 +1385,26 @@ static int      _s52_init       (s52engine *engine)
 
         //LOGI("s52egl:_init_S52():S52_init(%i,%i,%i,%i)\n", w, h, wmm, hmm);
 
-        S52_setViewPort(0, 0, w, h);
+        // init() will do that by default at startup
+        //S52_setViewPort(0, 0, w, h);
     }
 
+    // load PLib in s52.cfg
+    //S52_loadPLib(NULL);
+
+    S52_loadPLib(PLIB);
+    S52_loadPLib(COLS);
+
+    // Inland Waterway rasterization rules (form OpenCPN)
+    //S52_loadPLib("S52RAZDS.RLE");
+
+
 #ifdef S52_USE_ANDROID
+
+    // set GDAL data path
+    g_setenv("S57_CSV", "/sdcard/s52droid/gdal_data", 1);
+
+
     // read cell location fron s52.cfg
     //S52_loadCell(NULL, NULL);
     // Tadoussac
@@ -1252,6 +1439,17 @@ static int      _s52_init       (s52engine *engine)
 
 #else  // S52_USE_ANDROID
 
+    // Note:
+    // GDAL profile (s57attributes_<profile>.csv, s57objectclasses_<profile>.csv)
+    // iw: Inland Waterway profile add object classe OBCL:17000-17065 (and attributes)
+    //g_setenv("S57_PROFILE", "iw", 1);
+    //g_setenv("S57_PROFILE", "iw2", 1);
+
+    // GDAL debug info ON
+    //g_setenv("CPL_DEBUG", "ON", 1);
+
+
+
     // read cell location fron s52.cfg
     S52_loadCell(NULL, NULL);
 
@@ -1264,6 +1462,9 @@ static int      _s52_init       (s52engine *engine)
 
     // Rimouski
     //S52_loadCell("/home/sduclos/dev/gis/S57/riki-ais/ENC_ROOT/CA579041.000", NULL);
+
+    // load PLib in s52.cfg
+    //S52_loadPLib(NULL);
 
     // Estuaire du St-Laurent
     //S52_loadCell("/home/sduclos/dev/gis/S57/riki-ais/ENC_ROOT/CA279037.000", NULL);
@@ -1293,135 +1494,16 @@ static int      _s52_init       (s52engine *engine)
     }
 #endif
 
+
     // debug - remove clutter from this symb in SELECT mode
-    //S52_setS57ObjClassSupp("M_QUAL", TRUE);  // supress display of the U pattern
-    S52_setS57ObjClassSupp("M_QUAL", FALSE);  // display the U pattern
-    //S52_toggleObjClassON ("M_QUAL");           //  suppression ON
-    //S52_toggleObjClassOFF("M_QUAL");         //  suppression OFF
+    S52_setS57ObjClassSupp("M_QUAL", TRUE);  // suppress display of the U pattern
+    //S52_setS57ObjClassSupp("M_QUAL", FALSE);  // display the U pattern
 
+    _s52_setupMarPar();
 
-    S52_loadPLib(PLIB);
-    S52_loadPLib(COLS);
-
-    // load PLib in s52.cfg
-    S52_loadPLib(NULL);
-
-    // -- DEPTH COLOR ------------------------------------
-    S52_setMarinerParam(S52_MAR_TWO_SHADES,      0.0);   // 0.0 --> 5 shades
-    //S52_setMarinerParam(S52_MAR_TWO_SHADES,      1.0);   // 1.0 --> 2 shades
-
-    // sounding color
-    //S52_setMarinerParam(S52_MAR_SAFETY_DEPTH,    10.0);
-    S52_setMarinerParam(S52_MAR_SAFETY_DEPTH,    15.0);
-
-
-    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  10.0);
-    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  5.0);       // for triggering symb ISODGR01 (ODD winding) at Rimouski
-    S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  3.0);     // for white chanel in Rimouski
-    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  1.0);
-
-    //S52_setMarinerParam(S52_MAR_SHALLOW_CONTOUR, 10.0);
-    S52_setMarinerParam(S52_MAR_SHALLOW_CONTOUR, 5.0);
-
-    //S52_setMarinerParam(S52_MAR_DEEP_CONTOUR,   11.0);
-    S52_setMarinerParam(S52_MAR_DEEP_CONTOUR,   10.0);
-
-    S52_setMarinerParam(S52_MAR_SHALLOW_PATTERN, 0.0);  // (default off)
-    //S52_setMarinerParam(S52_MAR_SHALLOW_PATTERN, 1.0);  // ON (GPU expentive)
-    // -- DEPTH COLOR ------------------------------------
-
-    S52_setMarinerParam(S52_MAR_SYMBOLIZED_BND, 1.0);  // on (default) [Note: this tax the GPU]
-    //S52_setMarinerParam(S52_MAR_SYMBOLIZED_BND, 0.0);  // off
-
-    S52_setMarinerParam(S52_MAR_SHIPS_OUTLINE,   1.0);
-    S52_setMarinerParam(S52_MAR_HEADNG_LINE,     1.0);
-    S52_setMarinerParam(S52_MAR_BEAM_BRG_NM,     1.0);
-    //S52_setMarinerParam(S52_MAR_FULL_SECTORS,    0.0);    // (default ON)
-
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_BASE);    // always ON
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_STD);     // default
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_OTHER);
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_BASE | S52_MAR_DISP_CATEGORY_STD | S52_MAR_DISP_CATEGORY_OTHER);
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_STD | S52_MAR_DISP_CATEGORY_OTHER);
-    S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_SELECT);
-
-    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_NONE );
-    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_STD );   // default
-    //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_OTHER);
-    S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_SELECT);   // All Mariner (Standard(default) + Other)
-
-    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   0.0);     // DAY (default)
-    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   1.0);     // DAY DARK
-    S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   5.0);     // DAY 60 - need plib_COLS-3.4.1.rle
-    //S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   6.0);     // DUSK 60 - need plib_COLS-3.4.1.rle
-
-    S52_setMarinerParam(S52_MAR_SCAMIN,          1.0);   // ON (default)
-    //S52_setMarinerParam(S52_MAR_SCAMIN,          0.0);   // debug OFF - show all
-
-    // remove QUAPNT01 symbole (black diagonal and a '?')
-    S52_setMarinerParam(S52_MAR_QUAPNT01,        0.0);   // off
-
-    S52_setMarinerParam(S52_MAR_DISP_CALIB,      1.0);
-
-    // --- TEXT ----------------------------------------------
-    S52_setMarinerParam(S52_MAR_SHOW_TEXT,       1.0);  // default
-    //S52_setMarinerParam(S52_MAR_SHOW_TEXT,       0.0);
-
-    S52_setTextDisp(0, 100, TRUE);                      // show all text
-    //S52_setTextDisp(0, 100, FALSE);                   // no text
-
-    // cell's legend
-    //S52_setMarinerParam(S52_MAR_DISP_LEGEND, 1.0);   // show
-    S52_setMarinerParam(S52_MAR_DISP_LEGEND, 0.0);   // hide (default)
-    // -------------------------------------------------------
-
-
-    //S52_setMarinerParam(S52_MAR_DISP_DRGARE_PATTERN, 0.0);  // OFF
-    S52_setMarinerParam(S52_MAR_DISP_DRGARE_PATTERN, 1.0);  // ON (default)
-
-    S52_setMarinerParam(S52_MAR_ANTIALIAS,       1.0);   // on
-    //S52_setMarinerParam(S52_MAR_ANTIALIAS,       0.0);     // off
-
-    // trick to force symbole size
-#ifdef S52_USE_TEGRA2
-    // smaller on xoom so that proportion look the same
-    // as a 'normal' screen - since the eye is closer to the 10" screen of the Xoom
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
-#endif
-
-#ifdef S52_USE_ADRENO
-    // Nexus 7 (2013) [~323 ppi]
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.2);
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.2);
-#endif
-
-#if !defined(SET_SCREEN_SIZE) && !defined(S52_USE_ANDROID)
-    // NOTE: S52 pixels for symb are 0.3 mm
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
-#endif
-
-    // a delay of 0.0 to tell to not delete old AIS (default +600 sec old)
-    //S52_setMarinerParam(S52_MAR_DISP_VESSEL_DELAY, 0.0);
-    // FIXME: check AIS mmsi when s52ais reconnect
-    S52_setMarinerParam(S52_MAR_DISP_VESSEL_DELAY, 700.0); // older AIS - case where s52ais reconect
-
-    //S52_setMarinerParam(S52_MAR_DISP_NODATA_LAYER, 0.0); // debug: no NODATA layer
-    S52_setMarinerParam(S52_MAR_DISP_NODATA_LAYER, 1.0);   // default
-
-    //S52_setMarinerParam(S52_MAR_DISP_AFTERGLOW, 0.0);  // off (default)
-    S52_setMarinerParam(S52_MAR_DISP_AFTERGLOW, 1.0);  // on
-
-    //*
-    // debug - use for timing rendering
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_SY);
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_LS);
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_LC);
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_AC);
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_AP);
-    //S52_setMarinerParam(S52_CMD_WRD_FILTER, S52_CMD_WRD_FILTER_TX);
-    //*/
+    //S52_setTextDisp(0, 100, TRUE);                // show all text (default)
+    S52_setMarinerParam(S52_MAR_SHOW_TEXT,   1.0);  // default
+    //S52_setMarinerParam(S52_MAR_SHOW_TEXT, 0.0);
 
     // if first start, find where we are looking
     _s52_computeView(&engine->state);
@@ -1439,7 +1521,10 @@ static int      _s52_init       (s52engine *engine)
     _s52_setupVRMEBL(&engine->state);
 
     // set route
-    _s52_setupLEGLIN();
+    _s52_setupIceRoute();
+
+    // can't check guard zone here because projection not set yet (set via S52_draw())
+    //_s52_setupLEGLIN(&engine->state);
 
     // wind farme for testing centroids in a concave poly
     _s52_setupPRDARE(&engine->state);
@@ -1451,7 +1536,7 @@ static int      _s52_init       (s52engine *engine)
 #endif
 
 #ifdef S52_USE_EGL
-    S52_setEGLcb((EGL_cb)_egl_beg, (EGL_cb)_egl_end, engine);
+    S52_setEGLCallBack((S52_EGL_cb)_egl_beg, (S52_EGL_cb)_egl_end, engine);
 #endif
 
 #ifdef USE_AIS
@@ -1470,6 +1555,9 @@ static int      _s52_init       (s52engine *engine)
     engine->do_S52drawBlit    = FALSE;
     engine->do_S52setViewPort = FALSE;
 
+    S52_version();
+
+    LOGI("%s\n", S52_getPalettesNameList());
 
     LOGI("s52egl:_s52_init(): end ..\n");
 
@@ -2063,11 +2151,15 @@ static int      _android_motion_event(s52engine *engine, AInputEvent *event)
                 if (FALSE == mode_vrmebl_set) {
                     mode_vrmebl = (TRUE==mode_vrmebl) ? FALSE : TRUE;
                     if (TRUE == mode_vrmebl) {
-                        S52_toggleObjClassOFF("cursor");
-                        S52_toggleObjClassOFF("ebline");
+                        //S52_toggleObjClassOFF("cursor");
+                        //S52_toggleObjClassOFF("ebline");
+                        S52_setS57ObjClassSupp("cursor", FALSE);
+                        S52_setS57ObjClassSupp("ebline", FALSE);
                     } else {
-                        S52_toggleObjClassON("cursor");
-                        S52_toggleObjClassON("ebline");
+                        //S52_toggleObjClassON("cursor");
+                        //S52_toggleObjClassON("ebline");
+                        S52_setS57ObjClassSupp("cursor", TRUE);
+                        S52_setS57ObjClassSupp("ebline", TRUE);
                     }
                     mode_vrmebl_set = TRUE;
                 }
@@ -2117,7 +2209,8 @@ static int      _android_motion_event(s52engine *engine, AInputEvent *event)
                 engine->state.dy_pc = 0.0;
                 engine->state.dz_pc = (start_y - new_y) / engine->height;
                 engine->state.dw_pc = 0.0;
-                engine->do_S52draw  = FALSE;
+
+                engine->do_S52draw     = FALSE;
                 engine->do_S52drawLast = FALSE;
                 engine->do_S52drawBlit = TRUE;
                 //g_async_queue_push(engine->queue, engine);
@@ -2343,8 +2436,12 @@ static int32_t  _android_handle_input(struct android_app *app, AInputEvent *even
                 _android_init_external_UI(engine);
 
                 // remove VRMEBL (no use in s52ui)
-                S52_toggleObjClassOFF("cursor");
-                S52_toggleObjClassOFF("ebline");
+                //S52_toggleObjClassOFF("cursor");
+                //S52_toggleObjClassOFF("ebline");
+
+                // suppression ON
+                S52_setS57ObjClassSupp("cursor", TRUE);
+                S52_setS57ObjClassSupp("ebline", TRUE);
             }
 
             /*
@@ -2839,10 +2936,55 @@ static int      _X11_handleXevent(gpointer user_data)
 
             break;
 
+        case MotionNotify:
+            {
+                if (FALSE == _drawVRMEBL)
+                    break;
+
+                XMotionEvent *mouseEvent = (XMotionEvent *)&event;
+                double Xlon = mouseEvent->x;
+                double Ylat = engine->height - mouseEvent->y;
+
+                S52_setVRMEBL(_vrmeblA, Xlon, Ylat, NULL, NULL);
+
+                if (TRUE == S52_xy2LL(&Xlon, &Ylat)) {
+                    S52_pushPosition(_cursor2, Ylat, Xlon, 0.0);
+
+                    engine->do_S52draw     = FALSE;
+                    engine->do_S52drawLast = TRUE;
+                    _s52_draw_cb((gpointer) engine);
+                }
+            }
+            break;
+
+        case ButtonPress:
+            {
+                if (FALSE == _drawVRMEBL)
+                    break;
+
+                XMotionEvent *mouseEvent = (XMotionEvent *)&event;
+                double Xlon = mouseEvent->x;
+                double Ylat = engine->height - mouseEvent->y;
+
+                // first call set the origine
+                S52_setVRMEBL(_vrmeblA, Xlon, Ylat, NULL, NULL);
+
+                if (TRUE == S52_xy2LL(&Xlon, &Ylat)) {
+                    S52_pushPosition(_cursor2, Ylat, Xlon, 0.0);
+                    _leglin4xy[1] = Ylat;
+                    _leglin4xy[0] = Xlon;
+                }
+            }
+            break;
+
         case ButtonRelease:
             {
+                if (FALSE == _drawVRMEBL)
+                    break;
+
                 XButtonReleasedEvent *mouseEvent = (XButtonReleasedEvent *)&event;
 
+                /*
                 const char *name = S52_pickAt(mouseEvent->x, engine->height - mouseEvent->y);
                 if (NULL != name) {
                     unsigned int S57ID = atoi(name+7);
@@ -2850,7 +2992,7 @@ static int      _X11_handleXevent(gpointer user_data)
                     g_print("AttList=%s\n", S52_getAttList(S57ID));
 
                     {   // debug:  S52_xy2LL() --> S52_LL2xy() should be the same
-                        // NOTE:  LL (0,0) is the OpenGL origine (not GTK origine)
+                        // NOTE:  LL (0,0) is the OpenGL origine (not X11 origine)
                         double Xlon = 0.0;
                         double Ylat = 0.0;
                         S52_xy2LL(&Xlon, &Ylat);
@@ -2862,19 +3004,34 @@ static int      _X11_handleXevent(gpointer user_data)
                         g_print("vessel found\n");
                         unsigned int S57ID = atoi(name+7);
 
-                        S52ObjectHandle vessel = S52_getMarObjH(S57ID);
+                        S52ObjectHandle vessel = S52_getMarObj(S57ID);
                         if (NULL != vessel) {
                             S52_setVESSELstate(vessel, 1, 0, VESSELTURN_UNDEFINED);
                             //g_print("AttList: %s\n", S52_getAttList(S57ID));
                         }
                     }
                 }
+                */
 
+                double Xlon = mouseEvent->x;
+                double Ylat = engine->height - mouseEvent->y;
+
+                S52_setVRMEBL(_vrmeblA, mouseEvent->x, engine->height - mouseEvent->y, NULL, NULL);
+
+                if (TRUE == S52_xy2LL(&Xlon, &Ylat)) {
+                    S52_pushPosition(_cursor2, Ylat, Xlon, 0.0);
+
+                    //
+                    _leglin4xy[3] = Ylat;
+                    _leglin4xy[2] = Xlon;
+                    _s52_setupLEGLIN(&engine->state);
+
+                    // call to draw needed as LEGLIN is on layer 5
+                    engine->do_S52draw     = TRUE;
+                    engine->do_S52drawLast = TRUE;
+                    _s52_draw_cb((gpointer) engine);
+                }
             }
-            engine->do_S52draw     = TRUE;
-            engine->do_S52drawLast = TRUE;
-            //g_signal_emit(G_OBJECT(engine->state.gobject), engine->state.s52_draw_sigID, 0);
-            _s52_draw_cb((gpointer) engine);
             break;
 
         case KeyPress:
@@ -2885,7 +3042,7 @@ static int      _X11_handleXevent(gpointer user_data)
 
             // FIXME: use switch on keysym
 
-            // quit
+            // ESC - quit
             if (XK_Escape == keysym) {
                 g_main_loop_quit(engine->main_loop);
                 return TRUE;
@@ -2913,25 +3070,18 @@ static int      _X11_handleXevent(gpointer user_data)
             }
             // VRMEBL toggle
             if (XK_F4 == keysym) {
-                _drawVRMEBLtxt = !_drawVRMEBLtxt;
-                if (TRUE == _drawVRMEBLtxt) {
-                    S52_toggleObjClassOFF("cursor");
-                    S52_toggleObjClassOFF("ebline");
-                    S52_toggleObjClassOFF("vrmark");
+                _drawVRMEBL = !_drawVRMEBL;
+                if (TRUE == _drawVRMEBL) {
+                    S52_setS57ObjClassSupp("cursor", FALSE);
+                    S52_setS57ObjClassSupp("ebline", FALSE);
+                    S52_setS57ObjClassSupp("vrmark", FALSE);
 
-                    {
-                        double brg = 0.0;
-                        double rge = 0.0;
-                        S52_setVRMEBL(_vrmeblA, 100, 100, &brg, &rge);
-                        S52_setVRMEBL(_vrmeblA, 100, 500, &brg, &rge);
-                    }
-
-                    S52_pushPosition(_cursor2, engine->state.cLat, engine->state.cLon, 0.0);
+                    //S52_pushPosition(_cursor2, engine->state.cLat, engine->state.cLon, 0.0);
 
                 } else {
-                    S52_toggleObjClassON("cursor");
-                    S52_toggleObjClassON("ebline");
-                    S52_toggleObjClassON("vrmark");
+                    S52_setS57ObjClassSupp("cursor", TRUE);
+                    S52_setS57ObjClassSupp("ebline", TRUE);
+                    S52_setS57ObjClassSupp("vrmark", TRUE);
                 }
 
                 return TRUE;

@@ -15,27 +15,27 @@
 
 
 ##### TARGETS #########
-#all: s52glx         # OGR & GLX & GL 1.x
+#all: s52glx         # OGR & GLX & GL 1.1 & GLU
 #all: s52eglx        # OGR & EGL & X11   (for testing EGL/GLES2 on X)
 #all: s52eglarm      # OGR & EGL & ARM   (for testing EGL/GLES2 on ARM/Android)
 #all: s52eglw32      # OGR & EGL & Win32 (for testing EGL/GLES2 on Win32)
 #all: s52gv          # GV  (GTK)
 #all: s52gv2         # GV2 (GTK2)
-all: s52gtk2        # OGR & GTK2 & GL 1.x
+all: s52gtk2        # OGR & GTK2 & GL 1.5 (VBO)
 #all: s52gtk2gl2     # OGR & GTK2 & GL 2.x
 #all: s52gtk2p       # profiling
 #all: s52gtk2gps     # build s52gtk2 for testing with live data comming from GPSD
 #all: s52gtk2egl     # GTK2 & EGL
 #all: s52gtk3egl     # GTK3 & EGL
 #all: s52qt4         # OGR & Qt4 (build s52gtk2 to run on Qt4)
-#all: s52win32       # build s52gtk2 to run on wine/win32 (MinGW)
+#all: s52win32       # build libS52.dll on GL1 to run on wine/win32 (MinGW)
 #all: s52clutter     # use COGL for rendering text
 #all: s52clutter.js  # use COGL for rendering text and Javascript
 
 
 SHELL = /bin/sh
 
-.PHONY: test/* clean distclean
+.PHONY: test/* clean distclean LIBVERS
 
 
 DBG0   = -O0 -g
@@ -60,25 +60,22 @@ DBG    = $(DBG3)
 #CXX  = tcc -fPIC -fmudflap
 #CC   = gcc -std=c99 -fPIC -DMALLOC_CHECK_=3 -D_FORTIFY_SOURCE=2
 #CC   = gcc -std=c99 -fPIC
-CC   = gcc -std=gnu99 -fPIC # need gnu99 to get M_PI
+CC   = gcc -std=gnu99 -fPIC -DMALLOC_CHECK_=3 -D_FORTIFY_SOURCE=2 # need gnu99 to get M_PI
 #CC   = g++ -fPIC
 CXX  = g++ -fPIC
 
-# win32: check this _MINGW32_
-s52win32 : MINGW = /usr/bin/i586-mingw32msvc-
-s52win32 : CC    = $(MINGW)gcc -g -O0 -Wall -m32 -std=c99
-s52win32 : CXX   = $(MINGW)g++ -g -O0 -Wall -m32
+MINGW = /usr/bin/i586-mingw32msvc-
+#MINGW = /usr/bin/i686-w64-mingw32-
+s52win32 : CC    = $(MINGW)gcc -Wall -m32 -std=c99
+s52win32 : CXX   = $(MINGW)g++ -Wall -m32
+s52win32 : AR    = $(MINGW)ar
+s52win32 : RANLIB= $(MINGW)ranlib
+s52eglw32: CC    = $(MINGW)gcc -Wall -m32 -std=gnu99
+s52eglw32: CXX   = $(MINGW)g++ -Wall -m32
 
-#s52eglw32: MINGW = /usr/bin/i686-w64-mingw32-
-s52eglw32: MINGW = /usr/bin/i586-mingw32msvc-
-s52eglw32: CC    = $(MINGW)gcc -g -O0 -Wall -m32 -std=gnu99
-s52eglw32: CXX   = $(MINGW)g++ -g -O0 -Wall -m32
-
-s52win32 : CXX  = $(CC)  # hack
+#s52win32 : CXX  = $(CC)  # hack
 s52gv    : CXX  = $(CC)  # hack
 s52gv2   : CXX  = $(CC)  # hack
-
-s52win32 s52eglw32: LIBWIN32PATH = ../../mingw
 
 TAGS     = ctags
 
@@ -94,8 +91,7 @@ OBJS_GV  = gvS57layer.o S57gv.o
 
 OBJS_FREETYPE_GL = ./lib/freetype-gl/vector.o ./lib/freetype-gl/texture-atlas.o ./lib/freetype-gl/texture-font.o
 
-# Note: there is no GLU for ARM, the code handle tessallation by converting double->float on the fly,
-# so the tess code is pulled from COGL.
+# Note: there is no GLU for ARM, so the tess code is pulled from COGL.
 # (Quadric are also in GLU, but it is done by hand in S52GL.c to output float
 # for VBO in GLES2 for circle / disk / arc.)
 OBJS_TESS = ./lib/libtess/dict.o      ./lib/libtess/geom.o     \
@@ -140,10 +136,10 @@ OPENEV2_HOME = `pwd -P`/../../../openev2/trunk/src/lib/gv
 #                        - add 'extern "C"' to ogr/ogrsf_frmts/s57.h:40 S57FileCollector()  -or- compile S52 with g++
 #                        - for Windows file path in CATALOG to work on unix apply patch in doc/s57filecollector.cpp.diff
 # -DS52_USE_SUPP_LINE_OVERLAP
-#                        - supress display of overlapping line  (OGR patch in doc/ogrfeature.cpp.diff)
+#                        - supress display of overlapping line (need OGR patch in doc/ogrfeature.cpp.diff)
 #                        - work for LC() only (not LS())
 #                        - see S52 manual p. 45 doc/pslb03_2.pdf
-# -DS52_USE_C_AGGR_C_ASSO - return info C_AGGR C_ASSO on cursor pick (OGR patch in doc/ogrfeature.cpp.diff)
+# -DS52_USE_C_AGGR_C_ASSO- return info C_AGGR C_ASSO on cursor pick (need OGR patch in doc/ogrfeature.cpp.diff)
 # -DS52_USE_SYM_AISSEL01 - need symbol in test/plib-test-priv.rle
 # -DS52_USE_WORLD        - need shapefile WORLD_SHP in S52.c:201 ("--0WORLD.shp")
 # -DS52_USE_RADAR        - skip swapbuffer between DRAW & LAST cycle, skip read/write FB
@@ -164,10 +160,10 @@ OPENEV2_HOME = `pwd -P`/../../../openev2/trunk/src/lib/gv
 # OpenGL:
 # -DS52_USE_MESA3D       - Mesa drive specific code
 # -DS52_USE_EGL          - EGL callback from libS52
-# GL FIXFUNC:
+# GL FIX FUNC:
 # -DS52_USE_GL1          - GL1.x
 # -DS52_USE_GLSC1        - GL Safety Critical 1.0 (subset of GL1.3)
-# -DS52_USE_OPENGL_VBO   - GL1.5 or greater. Vertex Buffer Object
+# -DS52_USE_OPENGL_VBO   - GL1.5 or greater. Vertex Buffer Object used also in GL2+
 # GL GLSL:
 # -DS52_USE_GL2          - GL2.x
 # -DS52_USE_GLES2        - GLES2.x
@@ -182,19 +178,22 @@ OPENEV2_HOME = `pwd -P`/../../../openev2/trunk/src/lib/gv
 #
 # MinGW:
 # -D_MINGW
+#
+# PROJ4
+# -DS52_USE_PROJ         - Mercator Projection, used by all but s52gv and s52gv2
 
 
 # default CFLAGS for default target (s52gtk2)
-#         -DS52_USE_OPENGL_VBO
-#         -DS52_USE_SOCK
-CFLAGS = `pkg-config  --cflags glib-2.0 lcms glu gl ftgl`  \
+CFLAGS = `pkg-config  --cflags glib-2.0 lcms gl ftgl`  \
          `gdal-config --cflags`                        \
          -I./lib/parson                                \
-         -DS52_USE_PROJ                                \
-         -DS52_USE_GLIB2                               \
-         -DS52_USE_GL1                                 \
          -DS52_USE_FTGL                                \
-         -DS52_DEBUG $(DBG)
+         -DS52_USE_GL1                                 \
+         -DS52_USE_OPENGL_VBO                          \
+         -DS52_USE_SOCK                                \
+         -DS52_USE_GLIB2                               \
+         -DS52_USE_PROJ                                \
+         -DS52_DEBUG $(DBG2)
 
 s52gtk2gl2 : CFLAGS =                                  \
          `pkg-config  --cflags glib-2.0 lcms gl freetype2`  \
@@ -204,7 +203,6 @@ s52gtk2gl2 : CFLAGS =                                  \
          -I./lib/parson                                \
          -DS52_USE_PROJ                                \
          -DS52_USE_GLIB2                               \
-         -DS52_USE_EGL                                 \
          -DS52_USE_OPENGL_VBO                          \
          -DS52_USE_GL2                                 \
          -DS52_USE_FREETYPE_GL                         \
@@ -234,7 +232,6 @@ s52glx : CFLAGS = `pkg-config  --cflags glib-2.0 lcms glu gl ftgl` \
                   -DS52_USE_PROJ                  \
                   -DS52_USE_GLIB2                 \
                   -DS52_USE_GL1                   \
-                  -DS52_USE_OPENGL_VBO            \
                   -DS52_USE_FTGL                  \
                   -DS52_DEBUG $(DBG)
 
@@ -275,6 +272,9 @@ s52eglarm : CXX    = $(ARMTOOLCHAINROOT)/bin/arm-linux-androideabi-g++ -fPIC -mt
 s52eglarm : AR     = $(ARMTOOLCHAINROOT)/bin/arm-linux-androideabi-ar
 s52eglarm : RANLIB = $(ARMTOOLCHAINROOT)/bin/arm-linux-androideabi-ranlib
 
+#                     -DS52_USE_LOG                         \
+#                     -DS52_DEBUG $(DBG)
+
 s52eglarm : S52DROIDINC = /home/sduclos/S52/test/android/dist/sysroot/include
 s52eglarm : S52DROIDLIB = /home/sduclos/S52/test/android/dist/sysroot/lib
 
@@ -290,9 +290,8 @@ s52eglarm : S52DROIDLIB = /home/sduclos/S52/test/android/dist/sysroot/lib
                      -DS52_USE_SUPP_LINE_OVERLAP           \
                      -DS52_USE_SOCK                        \
                      -DS52_USE_TXT_SHADOW                  \
-                     -DS52_USE_LOG                         \
-                     -DS52_USE_AFGLOW                      \
-                     -DS52_DEBUG
+                     -DS52_USE_AFGLOW
+
 
 s52eglarm : CFLAGS = -I$(S52DROIDINC)                      \
                      -I$(S52DROIDINC)/glib-2.0             \
@@ -330,9 +329,12 @@ s52gtk2gps:  CFLAGS = `pkg-config  --cflags glib-2.0 lcms ftgl dbus-1 dbus-glib-
                       -DS52_DEBUG $(DBG)
 
 s52win32 : GDALPATH = ../../../gdal/gdal-1.7.2-mingw/
+
+#                      -DS52_DEBUG $(DBG2)                    \
+
 s52win32 : CFLAGS   = -mms-bitfields                         \
-                      -I../../mingw/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
-                      -I../../mingw/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
+                      -I../../mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
+                      -I../../mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
                       -I../../mingw/include                  \
                       -I$(GDALPATH)ogr                       \
                       -I$(GDALPATH)port                      \
@@ -345,13 +347,12 @@ s52win32 : CFLAGS   = -mms-bitfields                         \
                       -DS52_USE_OGR_FILECOLLECTOR            \
                       -DS52_USE_LOG                          \
                       -DG_DISABLE_ASSERT                     \
-                      -D_MINGW                               \
-                      -DS52_DEBUG $(DBG2)
+                      -D_MINGW
 
 s52eglw32 : GDALPATH = ../../../gdal/gdal-1.7.2-mingw
 s52eglw32 : CFLAGS   = -mms-bitfields                         \
-                      -I../../mingw/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
-                      -I../../mingw/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
+                      -I../../mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
+                      -I../../mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
                       -I../../mingw/include                   \
                       -I$(GDALPATH)/ogr                       \
                       -I$(GDALPATH)/port                      \
@@ -381,7 +382,7 @@ s52eglw32 : CFLAGS   = -mms-bitfields                         \
 #
 
 # default LIBS for default target
-LIBS = `pkg-config  --libs glib-2.0 lcms glu gl ftgl` \
+LIBS = `pkg-config  --libs glib-2.0 lcms gl ftgl` \
        `gdal-config --libs` -lproj
 
 s52gtk2gl2 : LIBS = `pkg-config  --libs glib-2.0 lcms gl freetype2` \
@@ -427,6 +428,7 @@ s52clutter    : libS52.so    test/s52clutter
 s52clutter.js : libS52.so    test/s52clutter.js
 s52qt4        : libS52.so    test/s52qt4
 s52win32      : libS52.dll   test/s52win32 s52win32fini
+#s52win32      : libS52.dll.a   test/s52win32
 #s52win32gps  : libS52.dll   test/s52win32gps s52win32fini
 s52eglw32     : libS52.dll   test/s52eglw32
 s52gtk2gps    : libS52.so    test/s52gtk2gps
@@ -435,13 +437,16 @@ s52gtk2gps    : libS52.so    test/s52gtk2gps
 S52raz-3.2.rle.o: S52raz.s
 	$(CC) -c S52raz.s -o $@
 
-%.o: %.c %.h S52.h
+#%.o: %.c %.h S52.h
+%.o: %.c *.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-S52GL.o: S52GL.c _GL1.i _GL2.i _GLU.i S52.h
+#S52GL.o: S52GL.c _GL1.i _GL2.i _GLU.i S52.h
+S52GL.o: S52GL.c _GL1.i _GL2.i _GLU.i *.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-S52.o: S52.c _S52.i S52.h
+#S52.o: S52.c _S52.i S52.h
+S52.o: S52.c _S52.i *.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 ./lib/libtess/%.o: ./lib/libtess/%.c
@@ -462,24 +467,24 @@ libS52.so: $(OBJS_S52) $(OBJ_PARSON) tags
 
 libS52gl2.so:  $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) tags
 	$(CXX) -rdynamic -shared  $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
-	-ln -s libS52gl2.so libS52.so
+	-ln -sf libS52gl2.so libS52.so
 
 libS52egl.so: $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) tags
 	$(CXX) -rdynamic -shared $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
-	-ln -s libS52egl.so libS52.so
+	-ln -sf libS52egl.so libS52.so
 
 libS52gv.so: $(OBJS_S52) $(OBJS_GV)
 	$(CXX) -shared $(OBJS_S52) $(OBJS_GV) $(LIBS) -o libS52.so
 
-#-static-libgcc
-#   -lfreetype6
-s52win32 s52eglw32 : GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/bin
-s52win32  : LIBS = $(LIBWIN32PATH)/libproj.a              \
+s52win32 s52eglw32: LIBWIN32PATH = ../../mingw
+s52win32 s52eglw32: GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/bin
+#s52win32 s52eglw32: GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/lib
+s52win32  : LIBS = -L$(GTKPATH) -lglib-2.0-0 -lfreetype6  \
+                   $(LIBWIN32PATH)/libproj.a              \
                    $(LIBWIN32PATH)/libftgl.a              \
                    $(LIBWIN32PATH)/libgdal-1.dll          \
                    $(LIBWIN32PATH)/liblcms-1.dll          \
                    -lopengl32 -lglu32                     \
-                   -L$(GTKPATH) -lglib-2.0-0 -lfreetype6
 
 s52eglw32 : LIBS = $(LIBWIN32PATH)/libproj.a              \
                    $(LIBWIN32PATH)/libgdal-1.dll          \
@@ -490,14 +495,19 @@ s52eglw32 : LIBS = $(LIBWIN32PATH)/libproj.a              \
 
 libS52.dll: $(OBJS_S52)
 	$(MINGW)objcopy --redefine-sym S52raz=_S52raz --redefine-sym S52razLen=_S52razLen S52raz-3.2.rle.o S52raz-3.2.rle.o
-	$(MINGW)g++ -g -mms-bitfields -O0 -Wall -shared -Wl,--add-stdcall-alias $(OBJS_S52) $(LIBS) -o $@
+	$(CXX) -O0 -g -Wall -mms-bitfields -shared -Wl,--add-stdcall-alias $(OBJS_S52) $(LIBS) -o $@
 
-#libS52.dll: $(OBJS_S52) $(OBJS_FREETYPE_GL) $(OBJS_TESS) $(OBJ_PARSON)
-#	$(MINGW)objcopy --redefine-sym S52raz=_S52raz                         \
-#	--redefine-sym S52razLen=_S52razLen S52raz-3.2.rle.o S52raz-3.2.rle.o
-#	 $(MINGW)g++ -g -mms-bitfields -O0 -Wall  -shared -Wl,--add-stdcall-alias \
-#	 $(OBJS_S52) $(OBJS_FREETYPE_GL) $(OBJS_TESS) $(OBJ_PARSON)               \
-#	 $(LIBS) -o $@
+libS52.dll.a: $(OBJS_S52)
+	$(AR) rc   libS52.dll.a $(OBJS_S52)
+	$(RANLIB)  libS52.dll.a
+
+libS52egl.dll: $(OBJS_S52) $(OBJS_FREETYPE_GL) $(OBJS_TESS) $(OBJ_PARSON)
+	$(MINGW)objcopy --redefine-sym S52raz=_S52raz                         \
+	--redefine-sym S52razLen=_S52razLen S52raz-3.2.rle.o S52raz-3.2.rle.o
+	 $(MINGW)g++ -g -mms-bitfields -O0 -Wall  -shared -Wl,--add-stdcall-alias \
+	 $(OBJS_S52) $(OBJS_FREETYPE_GL) $(OBJS_TESS) $(OBJ_PARSON) $(LIBS) -o $@
+	-rm -f libS52.dll
+	-ln -s libS52egl.dll libS52.dll
 
 
 
@@ -588,15 +598,30 @@ uninstall:
 	rm -f `gdal-config --prefix`/lib/libS52.so
 
 tar: backup
-backup: clean
-	(cd ..; tar cvf S52.tar S52)
-	bzip2 S52.tar
+backup: distclean
+	(cd ..; tar zcvf S52.tgz S52)
 
 tags:
-	$(TAGS) *.c *.h *.i
+	-$(TAGS) *.c *.h *.i
 
 err.txt: *.c *.h
 	cppcheck --enable=all $(DEFS) *.c 2> err.txt
+
+#"libS52-1.145\n" --> 1.145
+LIBVERS = $(shell grep libS52- S52utils.c | sed 's/.*"libS52-\(.*\)\\n"/\1/' )
+
+S52-$(LIBVERS).gir: S52.h
+	g-ir-scanner --verbose --namespace=S52 --nsversion=$(LIBVERS) --library=S52 --no-libtool S52.h -o $@
+	sudo cp $@ /usr/share/gir-1.0/
+
+S52-$(LIBVERS).typelib: S52-$(LIBVERS).gir
+	g-ir-compiler S52-$(LIBVERS).gir -o $@
+	sudo cp $@ /usr/lib/girepository-1.0/
+
+# https://git.gnome.org/browse/introspection-doc-generator
+doc: S52-$(LIBVERS).typelib
+	(cd /home/sduclos/dev/prog/doc-generator/introspection-doc-generator/; seed docs.js ../tmp S52;)
+	cp /home/sduclos/dev/prog/doc-generator/introspection-doc-generator/tmp/seed/* doc/tmp
 
 
 ############### Notes ##############################

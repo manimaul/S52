@@ -44,7 +44,6 @@ gboolean update_cb(void *dummy);
 
 #define  g_print printf     // prevent writing help() / dump() to log
 
-//#if _MINGW
 #ifdef _MINGW
 //#define  g_print printf     // prevent writing help() / dump() to log
 #define  g_sprintf sprintf
@@ -81,15 +80,27 @@ typedef struct pt2 {
 
 #define VESSELTURN_UNDEFINED 129
 
+
+#ifdef S52_USE_AFGLOW
+#define MAX_AFGLOW_PT (12 * 20)   // 12 min @ 1 vessel pos per 5 sec
+//#define MAX_AFGLOW_PT 10        // debug
+static S52ObjectHandle _vessel_ais_afglow = NULL;
+
+#endif  // S52_USE_AFGLOW
+
+
+#define VESSELLABEL "~~MV Non Such~~ "           // bug: last char will be trimmed
+#define OWNSHPLABEL "OWNSHP\\n220 deg / 6.0 kt"
+
+// VRMEBL
 static S52ObjectHandle _vrmeblA     = NULL;
-static S52ObjectHandle _vrmeblB     = NULL;
-static int             _originIsSet = FALSE;
+//static S52ObjectHandle _vrmeblB     = NULL;
+static int             _originIsSet = FALSE;  //for VRMEBL
 
 // VESSEL
 static S52ObjectHandle _ownshp      = NULL;
-static S52ObjectHandle _vessel_arpa = NULL;
+//static S52ObjectHandle _vessel_arpa = NULL;
 static S52ObjectHandle _vessel_ais  = NULL;
-
 static S52ObjectHandle _pastrk      = NULL;
 
 static S52ObjectHandle _leglin1     = NULL;
@@ -97,7 +108,6 @@ static S52ObjectHandle _leglin2     = NULL;
 static S52ObjectHandle _leglin3     = NULL;
 //static S52ObjectHandle _leglin4     = NULL;
 //static S52ObjectHandle _leglin5     = NULL;
-//static S52ObjectHandle _route[5]    = {NULL, NULL, NULL, NULL, NULL};
 static S52ObjectHandle _waypnt0     = NULL;
 static S52ObjectHandle _waypnt1     = NULL;
 static S52ObjectHandle _waypnt2     = NULL;
@@ -119,13 +129,14 @@ static S52ObjectHandle _marfea_point = NULL;
 static GtkWidget    *_win     = NULL;
 static GtkWidget    *_winArea = NULL;
 
-static GTimer       *_timer   = NULL;
+// debug
+//static GTimer       *_timer   = NULL;
 
 // debug - command-line options for test
 static gint     _execOpt = FALSE;
 static gchar   *_version = NULL;
 static gchar   *_outpng  = NULL;
-static gint     _s57id   = 0;
+//static gint     _s57id   = 0;
 static gchar   *_encnm   = NULL;
 
 static int      _usage(const char *arg)
@@ -193,7 +204,7 @@ static int      _usage(const char *arg)
     g_print("\tz    \t:S52_MAR_DISP_OVERLAP [ON/OFF]\n");
     g_print("\t1!   \t:S52_MAR_DISP_LAYER_LAST (0,1,2,3)\n");
     g_print("\t2    \t:S52_MAR_ROT_BUOY_LIGHT (+15 deg)\n");
-    g_print("\t3    \t:S52_MAR_DISP_CRSR_POS [ON/OFF]\n");
+    g_print("\t3    \t:S52_MAR_DISP_CRSR_PICK [ON/OFF]\n");
     g_print("\t4    \t:S52_MAR_DISP_GRATICULE [ON/OFF]\n");
     g_print("\t6^   \t:S52_MAR_DISP_WHOLIN [cycle]\n");
     g_print("\t3    \t:S52_MAR_DISP_LEGEND [ON/OFF]\n");
@@ -344,11 +355,11 @@ static int      _renderHelp(GtkWidget *widget)
     S52_drawStr(x, y-=dy, "UINFF", 0, str);
     g_sprintf(str, "S52_MAR_DISP_OVERLAP      z %4.1f", S52_getMarinerParam(S52_MAR_DISP_OVERLAP));
     S52_drawStr(x, y-=dy, "UINFF", 0, str);
-    g_sprintf(str, "S52_MAR_DISP_LAYER_LAST   1 %4.1f", S52_getMarinerParam(S52_MAR_DISP_LAYER_LAST));
-    S52_drawStr(x, y-=dy, "UINFF", 0, str);
+    //g_sprintf(str, "S52_MAR_DISP_LAYER_LAST   1 %4.1f", S52_getMarinerParam(S52_MAR_DISP_LAYER_LAST));
+    //S52_drawStr(x, y-=dy, "UINFF", 0, str);
     g_sprintf(str, "S52_MAR_ROT_BUOY_LIGHT    2 %4.1f", S52_getMarinerParam(S52_MAR_ROT_BUOY_LIGHT));
     S52_drawStr(x, y-=dy, "UINFF", 0, str);
-    g_sprintf(str, "S52_MAR_DISP_CRSR_POS     3 %4.1f", S52_getMarinerParam(S52_MAR_DISP_CRSR_POS));
+    g_sprintf(str, "S52_MAR_DISP_CRSR_PICK    3 %4.1f", S52_getMarinerParam(S52_MAR_DISP_CRSR_PICK));
     S52_drawStr(x, y-=dy, "UINFF", 0, str);
     g_sprintf(str, "S52_MAR_DISP_GRATICULE    4 %4.1f", S52_getMarinerParam(S52_MAR_DISP_GRATICULE));
     S52_drawStr(x, y-=dy, "UINFF", 0, str);
@@ -396,10 +407,6 @@ static int      _renderHelp(GtkWidget *widget)
 #if 0
 static int      _renderCrsrPos(GtkWidget *widget, double x, double y, double _brg, double _rge)
 {
-    // debug
-    //if (FALSE == S52_getMarinerParam(S52_MAR_DISP_CRSR_POS))
-    //    return FALSE;
-
     char str[80] = {'\0'};
     sprintf(str, "%05.1f° / %.1f m", _brg, _rge);
 
@@ -510,7 +517,7 @@ static int      _resetView(S52_view *view)
     return TRUE;
 }
 
-#ifdef USE_AIS
+#if 0
 static gboolean _draw(gpointer data)
 {
     //g_print("start _draw()\n");
@@ -539,7 +546,6 @@ static gint     _execOption()
 
     return TRUE;
 }
-
 
 static gboolean _scroll(GtkWidget *widget, GdkEventKey *event)
 {
@@ -627,7 +633,8 @@ static gboolean _meterDec(S52MarinerParameter paramName)
     return TRUE;
 }
 
-static gboolean _disp(S52MarinerParameter paramName, const char disp)
+//static gboolean _disp(S52MarinerParameter paramName, const char disp)
+static gboolean _disp(S52MarinerParameter paramName, S52_MAR_DISP_CATEGORY_t disp)
 {
     double val = (double) disp;
 
@@ -691,9 +698,13 @@ static gboolean _dumpParam()
     g_print("S52_MAR_ANTIALIAS         i %4.1f\n", S52_getMarinerParam(S52_MAR_ANTIALIAS));
     g_print("S52_MAR_QUAPNT01          j %4.1f\n", S52_getMarinerParam(S52_MAR_QUAPNT01));
     g_print("S52_MAR_DISP_OVERLAP      z %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_OVERLAP));
-    g_print("S52_MAR_DISP_LAYER_LAST   1 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_LAYER_LAST));
+
+    // FIXME
+    //g_print("S52_MAR_DISP_LAYER_LAST   1 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_LAYER_LAST));
+    g_print("S52_MAR_DISP_LAYER_LAST     %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_LAYER_LAST));
+
     g_print("S52_MAR_ROT_BUOY_LIGHT    2 %4.1f\n", S52_getMarinerParam(S52_MAR_ROT_BUOY_LIGHT));
-    g_print("S52_MAR_DISP_CRSR_POS     3 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_CRSR_POS));
+    g_print("S52_MAR_DISP_CRSR_PICK    3 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_CRSR_PICK));
     g_print("S52_MAR_DISP_GRATICULE    4 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_GRATICULE));
     g_print("S52_MAR_HEADNG_LINE       5 %4.1f\n", S52_getMarinerParam(S52_MAR_HEADNG_LINE));
     g_print("S52_MAR_DISP_WHOLIN       6 %4.1f\n", S52_getMarinerParam(S52_MAR_DISP_WHOLIN));
@@ -716,6 +727,44 @@ static gboolean _dumpParam()
     return TRUE;
 }
 
+#ifdef S52_USE_RADAR
+static guchar  *_radar_cb(double *cLat, double *cLng, double *rNM)
+{
+    (void)cLat;
+    (void)cLng;
+    (void)rNM;
+
+    //g_print("_radar_cb()\n");
+
+    return NULL;
+}
+#endif  // S52_USE_RADAR
+
+#if 0
+static int      _my_S52_loadObject_cb(const char *objname,   void *shape)
+{
+    //
+    // .. do something cleaver with each object of a layer ..
+    //
+
+    // this fill the terminal
+    //printf("\tOBJECT NAME: %s\n", objname);
+
+    return S52_loadObject(objname, shape);
+
+    //return TRUE;
+}
+#endif
+
+#ifdef S52_USE_LOG
+static int      _err_cb(const char *err)
+{
+    printf("%s\n", err);
+
+    return TRUE;
+}
+#endif
+
 static int      _setOWNSHP()
 {
     //_ownshp = S52_newOWNSHP("OWNSHP");
@@ -737,31 +786,11 @@ static int      _setOWNSHP()
 
     S52_setVector(_ownshp, 0, 220.0, 6.0);  // ownship use S52_MAR_VECSTB
 
-    return TRUE;
-}
-
-static int      _setVRMEBL()
-// FIXME: broken
-{
-    //int vrm             = TRUE;
-    //int ebl             = FALSE;
-    //int normalLineStyle = FALSE;
-    //int setOrigin       = FALSE;
-
-    // normal VRM/EBL
-    //_vrmeblA = S52_newVRMEBL(TRUE, TRUE, TRUE, FALSE);
-
-    // normal VRM (vrmark)
-    //--> _vrmeblA = S52_newVRMEBL(vrm, ebl, normalLineStyle, setOrigin);
-
-    // alterned VRM/EBL line style
-    //_vrmebl = S52_newVRMEBL(TRUE, TRUE, FALSE);
-
-    // alternate VRM/EBL, freely moveable
-    //_vrmeblB = S52_newVRMEBL(TRUE, TRUE, FALSE, TRUE);
-
-    // alternate VRM, freely moveable
-    //_vrmeblB = S52_newVRMEBL(TRUE, FALSE, FALSE, TRUE);
+    // test - supp ON
+    // all obj of a class
+    //S52_setS57ObjClassSupp("ownshp", TRUE);
+    // supp this obj
+    S52_toggleDispMarObj(_ownshp);
 
     return TRUE;
 }
@@ -798,6 +827,33 @@ static int      _setVESSEL()
     // VTS (this will not draw anything!)
     //_vessel_vts = S52_newVESSEL(3, dummy);
 
+
+    return TRUE;
+}
+
+
+static int      _setVRMEBL()
+// FIXME: broken
+{
+    //int vrm             = TRUE;
+    //int ebl             = FALSE;
+    //int normalLineStyle = FALSE;
+    //int setOrigin       = FALSE;
+
+    // normal VRM/EBL
+    //_vrmeblA = S52_newVRMEBL(TRUE, TRUE, TRUE, FALSE);
+
+    // normal VRM (vrmark)
+    //--> _vrmeblA = S52_newVRMEBL(vrm, ebl, normalLineStyle, setOrigin);
+
+    // alterned VRM/EBL line style
+    //_vrmebl = S52_newVRMEBL(TRUE, TRUE, FALSE);
+
+    // alternate VRM/EBL, freely moveable
+    //_vrmeblB = S52_newVRMEBL(TRUE, TRUE, FALSE, TRUE);
+
+    // alternate VRM, freely moveable
+    //_vrmeblB = S52_newVRMEBL(TRUE, FALSE, FALSE, TRUE);
 
     return TRUE;
 }
@@ -851,23 +907,6 @@ static int      _setRoute()
     _leglin3  = S52_newLEGLIN(1, 12.0, 0.2, _view.cLat + 0.01, _view.cLon + 0.01, _view.cLat - 0.010, _view.cLon - 0.010);
     _leglin4  = S52_newLEGLIN(1, 12.0, 0.2, _view.cLat - 0.01, _view.cLon + 0.01, _view.cLat - 0.015, _view.cLon + 0.015);
     _leglin5  = S52_newLEGLIN(1, 12.0, 0.2, _view.cLat - 0.01, _view.cLon + 0.01, _view.cLat - 0.005, _view.cLon + 0.015);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    _route[2] = _leglin3;
-    S52_setRoute(3, _route);
-
-    _route[0] = _leglin2;
-    _route[1] = _leglin3;
-    _route[2] = _leglin4;
-    S52_setRoute(3, _route);
-
-    //_route[0] = _leglin1;
-    //_route[1] = _leglin4;
-    //S52_setRoute(2, _route);
-
-    //_route[0] = _leglin1;
-    //_route[1] = _leglin5;
-    //S52_setRoute(2, _route);
     */
 
     /*
@@ -875,12 +914,6 @@ static int      _setRoute()
     //_leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpW.lat, wpW.lon, wpS.lat, wpS.lon);
     //_leglin3  = S52_newLEGLIN(1, 12.0, 0.2, wpS.lat, wpS.lon, wpE.lat, wpE.lon);
     //_leglin4  = S52_newLEGLIN(1, 12.0, 0.2, wpE.lat, wpE.lon, wpN.lat, wpN.lon);
-
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    _route[2] = _leglin3;
-    _route[3] = _leglin4;
-    S52_setRoute(4, _route);
     */
 
 
@@ -894,18 +927,12 @@ static int      _setRoute()
     // heading change from NW to NE
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpS.lat, wpS.lon, wpW.lat, wpW.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpW.lat, wpW.lon, wpN.lat, wpN.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     /*
     // heading change from NE to NW
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpS.lat, wpS.lon, wpE.lat, wpE.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpE.lat, wpE.lon, wpN.lat, wpN.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     //-----------------------------
@@ -913,18 +940,12 @@ static int      _setRoute()
     // heading change from NW to SW
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpE.lat, wpE.lon, wpN.lat, wpN.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpN.lat, wpN.lon, wpW.lat, wpW.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     /*
     // heading change from SW to NW
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpE.lat, wpE.lon, wpS.lat, wpS.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpS.lat, wpS.lon, wpW.lat, wpW.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     //-----------------------------
@@ -932,32 +953,21 @@ static int      _setRoute()
     // heading change from SE to NE
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpW.lat, wpW.lon, wpS.lat, wpS.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpS.lat, wpS.lon, wpE.lat, wpE.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     /*
     // heading change from NE to SE
     _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpW.lat, wpW.lon, wpN.lat, wpN.lon);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.3, wpN.lat, wpN.lon, wpE.lat, wpE.lon);
-    _route[0] = _leglin1;
-    _route[1] = _leglin2;
-    S52_setRoute(2, _route);
     //*/
 
     //-----------------------------
     //*
     // heading change from SW to SE
-    _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpN.lat, wpN.lon, wpW.lat, wpW.lon, NULL);
+    //_leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpN.lat, wpN.lon, wpW.lat, wpW.lon, NULL);
+    _leglin1  = S52_newLEGLIN(1, 12.0, 0.1, wpN.lat, wpN.lon, wpW.lat, wpW.lon, FALSE);
     _leglin2  = S52_newLEGLIN(1, 12.0, 0.2, wpW.lat, wpW.lon, wpS.lat, wpS.lon, _leglin1);
     _leglin3  = S52_newLEGLIN(1, 12.0, 0.3, wpS.lat, wpS.lon, wpE.lat, wpE.lon, _leglin2);
-    //S52_toggleObjSUP(_leglin1);
-    //_route[0] = _leglin1;
-    //_route[1] = _leglin2;
-    //_route[2] = _leglin3;
-    //S52_setRoute(3, _route);
-    //S52_setCurveLeg(_leglin1, _leglin2);
     //*/
 
 
@@ -1008,48 +1018,6 @@ static int      _setCLRLIN()
 
     return TRUE;
 }
-
-#ifdef S52_USE_RADAR
-static guchar  *_radar_cb(double *cLat, double *cLng, double *rNM)
-{
-    (void)cLat;
-    (void)cLng;
-    (void)rNM;
-
-    //g_print("_radar_cb()\n");
-
-    return NULL;
-}
-#endif
-
-#if 0
-static int      _my_S52_loadObject_cb(const char *objname,   void *shape)
-{
-    //
-    // .. do something cleaver with each object of a layer ..
-    //
-
-    // this fill the terminal
-    //printf("\tOBJECT NAME: %s\n", objname);
-
-    return S52_loadObject(objname, shape);
-
-    //return TRUE;
-}
-
-static int      _my_S52_loadLayer_cb (const char *layername, void *layer, S52_loadObject_cb loadObject_cb)
-{
-    //
-    // .. do something cleaver with each layer ..
-    //
-
-    //printf("\n**** LAYER NAME: %s\n", layername);
-
-    return S52_loadLayer(layername, layer, _my_S52_loadObj_cb);
-
-    //return TRUE;
-}
-#endif
 
 static int      _setMarFeature()
 // exemple to display something define in the PLib directly
@@ -1133,17 +1101,19 @@ static int      _initS52()
     //gdk_screen_get_monitor_geometry(screen, 0, &dest);
     //gdk_screen_get_monitor_geometry(screen, 0, &dest);
 
-    // debug --info from xrandr
+    /* debug --info from xrandr
     w      = 1280;
     h      = 1024;
     wmm    = 376;
     //hmm    = 301; // wrong
     hmm    = 307;
+    */
 
-    printf("screen (w/h/wmm/hmm): %i / %i / %i / %i\n", w, h, wmm, hmm);
+    // debug
+    g_print("s52gtk2.c:_initS52(): screen (w/h/wmm/hmm): %i / %i / %i / %i\n", w, h, wmm, hmm);
 
     // can be used before S52_init()
-    S52_version();
+    g_print("%s\n", S52_version());
 
 #ifdef S52_USE_LOG
     S52_init(w, h, wmm, hmm, _err_cb);
@@ -1171,7 +1141,7 @@ static int      _initS52()
     //ret = S52_toggleObjClassOFF("M_QUAL");  // OK - ret == TRUE
     //ret = S52_toggleObjClassON ("M_QUAL");  // OK - ret == TRUE
     //ret = S52_toggleObjClassON ("M_QUAL");  // OK - ret == FALSE
-    //S52_setS57ObjClassSupp("M_QUAL", TRUE);
+    S52_setS57ObjClassSupp("M_QUAL", TRUE);
 
     // test
     //S52_toggleObjClass("DRGARE");   // drege area
@@ -1201,8 +1171,7 @@ static int      _initS52()
     S52_setMarinerParam("S52_MAR_SYMBOLIZED_BND",  1.0);
     S52_setMarinerParam("S52_MAR_SYMPLIFIED_PNT",  1.0);
 
-    //S52_setMarinerParam("S52_MAR_DISP_CATEGORY",  2.0);  // OTHER
-    S52_setMarinerParam("S52_MAR_DISP_CATEGORY",   1.0);  // STANDARD (default)
+    S52_setMarinerParam("S52_MAR_DISP_CATEGORY",   S52_MAR_DISP_CATEGORY_STD);  // STANDARD (default)
 
     S52_setMarinerParam("S52_MAR_COLOR_PALETTE",   0.0);  // first palette
 
@@ -1219,8 +1188,6 @@ static int      _initS52()
     S52_setMarinerParam("S52_MAR_QUAPNT01",        0.0);
     */
 
-    //S52_setMarinerParam(S52_MAR_SHOW_TEXT,       15.0);
-    //S52_setMarinerParam(S52_MAR_SHOW_TEXT,      60.0);
     //S52_setMarinerParam(S52_MAR_SHOW_TEXT,       0.0);
     S52_setMarinerParam(S52_MAR_SHOW_TEXT,       1.0);
     S52_setTextDisp(0, 100, TRUE);                      // show all text
@@ -1231,7 +1198,9 @@ static int      _initS52()
     // sounding color
     S52_setMarinerParam(S52_MAR_SAFETY_DEPTH,   10.0);
 
-    S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  4.0);
+    S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  5.0);       // for triggering symb ISODGR01 (ODD winding) at Rimouski
+    //S52_setMarinerParam(S52_MAR_SAFETY_CONTOUR,  4.0);
+
     S52_setMarinerParam(S52_MAR_SHALLOW_CONTOUR, 5.0);
     S52_setMarinerParam(S52_MAR_DEEP_CONTOUR,   10.0);
 
@@ -1252,14 +1221,10 @@ static int      _initS52()
     S52_setMarinerParam(S52_MAR_SYMBOLIZED_BND,  1.0);
     S52_setMarinerParam(S52_MAR_SYMPLIFIED_PNT,  1.0);
 
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  0.0);  // BASE
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  1.0);  // STANDARD (default)
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  2.0);  // OTHER
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  3.0);  // SELECT (all)
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  S52_MAR_DISP_CATEGORY_BASE);  // BASE
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  S52_MAR_DISP_CATEGORY_STD);   // STANDARD (default)
-    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY,  S52_MAR_DISP_CATEGORY_OTHER); // OTHER
-    S52_setMarinerParam(S52_MAR_DISP_CATEGORY,   S52_MAR_DISP_CATEGORY_SELECT);   // SELECT (all)
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_BASE);   // BASE
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_STD);    // STANDARD (default)
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_OTHER);  // OTHER
+    //S52_setMarinerParam(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_SELECT); // SELECT (all)
 
     S52_setMarinerParam(S52_MAR_COLOR_PALETTE,   0.0);   // first palette
 
@@ -1286,7 +1251,7 @@ static int      _initS52()
     // Deep           30 m
     /*
     S52_setMarinerParam("S52_MAR_SHOW_TEXT",        1.0);
-    S52_setMarinerParam("S52_MAR_DISP_CATEGORY",    3.0); // OTHER_ALL - show all
+    S52_setMarinerParam("S52_MAR_DISP_CATEGORY",    S52_MAR_DISP_CATEGORY_OTHER); // OTHER
     S52_setMarinerParam("S52_MAR_TWO_SHADES",       0.0); // Depth Shades
     S52_setMarinerParam("S52_MAR_SAFETY_CONTOUR",  10.0);
     S52_setMarinerParam("S52_MAR_SAFETY_DEPTH",     7.0);
@@ -1301,34 +1266,39 @@ static int      _initS52()
     ////////////////////////////////////////////////////////////
     //
     // setup mariner object (for debugging)
-    //
+    // test loading objH _before_ loadPLib
+    _setMarFeature();
 
     // load additional PLib (facultative)
     //S52_loadPLib("plib_pilote.rle");
     //S52_loadPLib("plib-test2.rle");
-
-    // load auxiliary PLib (fix waypnt/WAYPNT01, OWNSHP vector)
+    // load auxiliary PLib (fix waypnt/WAYPNT01, OWNSHP vector, put cursor on layer 9, ..)
     S52_loadPLib("PLAUX_00.DAI");
-
-    // load PLib from s52.cfg indication
-    S52_loadPLib(NULL);
-
     // lastest (S52 ed 6.0) IHO colors from www.ecdisregs.com
-    S52_loadPLib("plib_COLS-3.4.1.rle");
+    S52_loadPLib("plib_COLS-3.4-a.rle");
+    // load PLib from s52.cfg indication
+    //S52_loadPLib(NULL);
 
-    // debug - turn off rendering of last layer
-    // very slow on some machine
+
     //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_NONE);  // none
     //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_STD);  // Mariner Standard
     //S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_OTHER);  // Mariner Other (EBL VRN)
     S52_setMarinerParam(S52_MAR_DISP_LAYER_LAST, S52_MAR_DISP_LAYER_LAST_STD | S52_MAR_DISP_LAYER_LAST_OTHER);    // All Mariner (Standard + Other)
+                    
+    //S52_setMarinerParam(S52_MAR_DISP_CRSR_PICK, 0.0);  // none
+    S52_setMarinerParam(S52_MAR_DISP_CRSR_PICK, 1.0);  // pick/highlight top object
+    //S52_setMarinerParam(S52_MAR_DISP_CRSR_PICK, 2.0);  // pick stack/highlight top
+    //S52_setMarinerParam(S52_MAR_DISP_CRSR_PICK, 3.0);  // pick stack+ASSOC/highlight ASSOC (compiled with -DS52_USE_C_AGGR_C_ASSO)
+
 
     // cell's legend
     //S52_setMarinerParam(S52_MAR_DISP_LEGEND, 1.0);   // show
     S52_setMarinerParam(S52_MAR_DISP_LEGEND, 0.0);     // hide
 
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
-    S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
+    //S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.3);
+    //S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.3);
+    //S52_setMarinerParam(S52_MAR_DOTPITCH_MM_X, 0.2);
+    //S52_setMarinerParam(S52_MAR_DOTPITCH_MM_Y, 0.2);
 
     S52_setMarinerParam(S52_MAR_DISP_CALIB, 1.0);
 
@@ -1346,21 +1316,22 @@ static int      _initS52()
     // init decoration (scale bar, North arrow, unit, calib.)
     S52_newCSYMB();
 
-    //*
     _setOWNSHP();
-
-    _setVRMEBL();
-    // FIXME: broken
-
     _setVESSEL();
+
+
+    //*
+    _setVRMEBL();
 
     _setPASTRK();
 
+    // guard zone OFF (pick need projection)
+    S52_setMarinerParam(S52_MAR_GUARDZONE_BEAM, 0.0);
     _setRoute();
 
     _setCLRLIN();
 
-    _setMarFeature();
+    //_setMarFeature();
     //*/
 
 #ifdef S52_USE_RADAR
@@ -1381,15 +1352,6 @@ static int      _initS52()
     return TRUE;
 }
 
-#ifdef S52_USE_LOG
-static int      _err_cb(const char *err)
-{
-    printf("%s\n", err);
-
-    return TRUE;
-}
-#endif
-
 static void     realize(GtkWidget *widget, gpointer data)
 {
     (void)widget;
@@ -1397,15 +1359,17 @@ static void     realize(GtkWidget *widget, gpointer data)
 
 #ifdef USE_AIS
     // Note: data form AIS start too fast for the main loop
-    s52ais_initAIS(update_cb);
+    s52ais_initAIS();
 
     // for continuous drawing
-    g_idle_add(_draw, widget);
+    //g_idle_add(_draw, widget);
     //g_idle_add(update_cb, widget);
 
     //g_print("install hook to loop on gtk_widget_draw when idle\n");
 #endif
 
+    // setup S52 display
+    //_initS52();
 }
 
 static gboolean configure_event(GtkWidget         *widget,
@@ -1518,7 +1482,7 @@ static gboolean expose_event(GtkWidget      *widget,
 
     if (TRUE == _execOpt) {
         if (NULL != _outpng) {
-            S52_dumpS57IDPixels(_outpng, _s57id, 200, 200);
+            //S52_dumpS57IDPixels(_outpng, _s57id, 200, 200);
             gtk_main_quit();
         }
     }
@@ -1572,12 +1536,14 @@ static gboolean key_release_event(GtkWidget   *widget,
         case GDK_i     :_toggle(S52_MAR_ANTIALIAS);        break;
         case GDK_j     :_toggle(S52_MAR_QUAPNT01);         break;
         case GDK_z     :_toggle(S52_MAR_DISP_OVERLAP);     break;
-        case GDK_1     :_meterInc(S52_MAR_DISP_LAYER_LAST);break;
-        case GDK_exclam:_meterDec(S52_MAR_DISP_LAYER_LAST);break;
+
+        // FIXME: none, std, other, select
+        //case GDK_1     :_meterInc(S52_MAR_DISP_LAYER_LAST);break;
+        //case GDK_exclam:_meterDec(S52_MAR_DISP_LAYER_LAST);break;
 
         case GDK_2     :_inc(S52_MAR_ROT_BUOY_LIGHT);      break;
 
-        case GDK_3     :_toggle(S52_MAR_DISP_CRSR_POS);
+        case GDK_3     :_toggle(S52_MAR_DISP_CRSR_PICK);
                         _toggle(S52_MAR_DISP_LEGEND);
                         _toggle(S52_MAR_DISP_CALIB);
                         _toggle(S52_MAR_DISP_DRGARE_PATTERN);
@@ -1608,7 +1574,7 @@ static gboolean key_release_event(GtkWidget   *widget,
         case GDK_7     :_disp(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_BASE);   break; // DISPLAYBASE
         case GDK_8     :_disp(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_STD);    break; // STANDARD
         case GDK_9     :_disp(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_OTHER);  break; // OTHER
-        case GDK_0     :_disp(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_SELECT); break; // OTHER (all)
+        case GDK_0     :_disp(S52_MAR_DISP_CATEGORY, S52_MAR_DISP_CATEGORY_SELECT); break; // SELECT (all)
 
         case GDK_k     :_cpal(S52_MAR_COLOR_PALETTE,  1.0);break;
         case GDK_K     :_cpal(S52_MAR_COLOR_PALETTE, -1.0);break;
@@ -1648,17 +1614,16 @@ static gboolean button_release_event(GtkWidget      *widget,
 
     // Ctl + left click: set origine for 'freely movable' VRMEBL
     if ((GDK_CONTROL_MASK & event->state) && (1==event->button)) {
-        double x = event->x;
-        double y = event->y;
-
-        // set origine 
-        //S52_setVRMEBLorigine(_vrmebl, x, y);
-        //S52_setVRMEBL(_vrmebl, x, y, TRUE);
-
+        /*
+        double x   = event->x;
+        double y   = event->y;
         double brg = 0.0;
         double rge = 0.0;
+
         //S52_setVRMEBL(_vrmeblB, x, y, &brg, &rge);
         S52_setVRMEBL(_vrmeblA, x, y, &brg, &rge);
+        */
+
         _originIsSet = TRUE;
 
         return TRUE;
@@ -1674,23 +1639,22 @@ static gboolean button_release_event(GtkWidget      *widget,
                 _view.cLat = y;
                 _view.cLon = x;
                 S52_setView(_view.cLat, _view.cLon, _view.rNM, _view.north);
+
                 gtk_widget_draw(widget, NULL);
 
                 break; 
             }
         case 1: // left click
             {
-                // FIXME: why this does work without this
-                // because same context
                 GdkGLContext  *glcontext  = gtk_widget_get_gl_context (widget);
                 GdkGLDrawable *gldrawable = gtk_widget_get_gl_drawable(widget);
 
                 if (!gdk_gl_drawable_gl_begin(gldrawable, glcontext))
                     return FALSE;
 
-                const char *name = S52_pickAt(event->x, event->y);
+                const char *name = S52_pickAt(event->x, _height-event->y);
                 if (NULL != name)
-                    g_print("OBJ(%.f, %.f): %s\n", event->x, event->y, name);
+                    g_print("s52gtk.c:button_release_event(): OBJ PICKED(%.f, %.f): %s\n", event->x, event->y, name);
 
                 S52_draw();
                 S52_drawLast();
@@ -1705,7 +1669,7 @@ static gboolean button_release_event(GtkWidget      *widget,
                 break;
             }
         default:
-            g_print("EVENT(button_release_event)\n");
+            g_print("s52gtk.c:button_release_event(): EVENT(%i)\n", event->button);
     }
 
 
@@ -1738,7 +1702,8 @@ static gboolean motion_notify_event(GtkWidget      *widget,
     if (!gdk_gl_drawable_gl_begin(gldrawable, glcontext))
         return FALSE;
 
-    if (NULL != _vrmeblA) {
+    //if (NULL != _vrmeblA) {
+    if (FALSE != _vrmeblA) {
         _brg = 0.0;
         _rge = 0.0;
         S52_setVRMEBL(_vrmeblA, _x, _y, &_brg, &_rge);
@@ -1766,9 +1731,41 @@ static gboolean motion_notify_event(GtkWidget      *widget,
     return TRUE;
 }
 
-#ifdef USE_AIS
-gboolean update_cb(void *dummy)
+#ifdef USE_FAKE_AIS
+static int      _s52_updTimeTag(void)
 {
+
+    // fake one AIS
+    if (NULL != _vessel_ais) {
+        gchar         str[80];
+        GTimeVal      now;
+        static double hdg = 0.0;
+
+        hdg = (hdg >= 359.0) ? 0.0 : hdg+1;  // fake rotating hdg
+
+        g_get_current_time(&now);
+        g_sprintf(str, "%s %lis", VESSELLABEL, now.tv_sec);
+        S52_setVESSELlabel(_vessel_ais, str);
+        S52_pushPosition(_vessel_ais, _view.cLat - 0.01, _view.cLon + 0.01, hdg);
+        S52_setVector(_vessel_ais, 1, hdg, 16.0);   // ground
+
+#ifdef S52_USE_AFGLOW
+        // stay at the same place but fill internal S52 buffer - in the search for possible leak
+        S52_pushPosition(_vessel_ais_afglow, _view.cLat, _view.cLon, 0.0);
+#endif
+    }
+
+
+    return TRUE;
+}
+#endif
+
+//#ifdef USE_AIS
+//gboolean update_cb(void *dummy)
+static int      _s52_draw_cb    (gpointer user_data)
+{
+    (void)user_data;
+
     GdkGLContext  *glcontext  = gtk_widget_get_gl_context (_winArea);
     GdkGLDrawable *gldrawable = gtk_widget_get_gl_drawable(_winArea);
 
@@ -1782,6 +1779,9 @@ gboolean update_cb(void *dummy)
     if (!gdk_gl_drawable_gl_begin(gldrawable, glcontext))
         return FALSE;
 
+#ifdef USE_FAKE_AIS
+    _s52_updTimeTag();
+#endif
 
     if (TRUE == S52_drawLast()) {
 //#if !defined(S52_USE_GLES2)
@@ -1807,15 +1807,13 @@ gboolean update_cb(void *dummy)
     //*/
 
 
+    // debug
     //gdouble sec = g_timer_elapsed(_timer, NULL);
-    //PRINTF("%.0f msec (%i obj / %i cmd)\n", sec * 1000, _nobj, _ncmd);
-    //g_print("%.0f msec (%i obj / %i cmd) renew = %i / %iB\n", sec * 1000, _nobj, _ncmd, _nrealloc, fobj.sz);
-    //g_print("DRAW: %.0f msec\n", sec * 1000);
     //printf("update_cb: %.0f msec\n", sec * 1000);
 
     return TRUE;
 }
-#endif
+//#endif
 
 int main(int argc, char **argv)
 {
@@ -1827,15 +1825,25 @@ int main(int argc, char **argv)
     //g_atexit(g_mem_profile);
     //return 1;
 
-    gtk_init(&argc, &argv);
-
     //g_thread_init(&vtable);
+    //g_thread_init(NULL);
+
+    g_print("s52gtk2:main(): starting (argc:%i, argv[0]:%s\n", argc, argv[0]);
+
+    gtk_init(&argc, &argv);
 
     gtk_gl_init(&argc, &argv);
 
     _option(argc, argv);
 
     gtk_set_locale();
+
+    // debug - GLib ptr array size of gint
+    //GPtrArray *_ptrA = g_ptr_array_new();
+    //g_ptr_array_set_size(_ptrA, -1);
+    // failed to allocate 34359738360 bytes
+    // Note:       2^35 = 34359738368
+
 
 #ifdef S52_USE_MESA3D
     // Mesa3D env - signal no vSync
@@ -1844,14 +1852,15 @@ int main(int argc, char **argv)
     g_setenv("GALLIUM_MSAA", "4", 1);
 #endif
 
-    _timer = g_timer_new();
+    // debug
+    //_timer = g_timer_new();
 
     // Main Window
     _win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     // normal
     //gtk_window_fullscreen(GTK_WINDOW(_win));
     // debug
-    gtk_window_set_default_size(GTK_WINDOW(_win), 800, 600 );
+    gtk_window_set_default_size(GTK_WINDOW(_win), 800, 600);
 
     // Drawing Area
     _winArea = gtk_drawing_area_new();
@@ -1862,10 +1871,10 @@ int main(int argc, char **argv)
 #if defined(S52_USE_GL2) || defined(S52_USE_GLES2)
     int mode = (GdkGLConfigMode) (GDK_GL_MODE_RGBA | GDK_GL_MODE_DOUBLE);
 #else
-    int mode = (GdkGLConfigMode) (GDK_GL_MODE_RGBA | GDK_GL_MODE_DOUBLE | GDK_GL_MODE_STENCIL );
+    int mode = (GDK_GL_MODE_RGBA | GDK_GL_MODE_DOUBLE | GDK_GL_MODE_STENCIL );
 #endif
 
-    GdkGLConfig *glconfig = gdk_gl_config_new_by_mode(mode);
+    GdkGLConfig *glconfig = gdk_gl_config_new_by_mode((GdkGLConfigMode)mode);
     if (NULL == glconfig) {
         g_print("gdk_gl_config_new_by_mode() failed .. exit\n");
         goto exit;
@@ -1880,9 +1889,13 @@ int main(int argc, char **argv)
     gtk_widget_set_events(_winArea, GDK_POINTER_MOTION_MASK | GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
     //gtk_widget_set_events(_winArea, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
 
+    //GTK_WIDGET_UNSET_FLAGS(_win,     GTK_DOUBLE_BUFFERED);
+    //GTK_WIDGET_UNSET_FLAGS(_winArea, GTK_DOUBLE_BUFFERED);
+
     // setup S52 display
     _initS52();
 
+    g_timeout_add(500, _s52_draw_cb, NULL); // 0.5 sec
 
 #if S52_USE_GLIB2
     g_signal_connect_after(G_OBJECT(_winArea), "realize",             G_CALLBACK(realize),         NULL);
@@ -1907,17 +1920,49 @@ int main(int argc, char **argv)
 
 
 exit:
-    // S52 cleanup
+/*
+// VRMEBL
+//static S52ObjectHandle _vrmeblA     = NULL;
+//static S52ObjectHandle _vrmeblB     = NULL;
+// VESSEL
+static S52ObjectHandle _ownshp      = NULL;
+//static S52ObjectHandle _vessel_arpa = NULL;
+static S52ObjectHandle _vessel_ais  = NULL;
+static S52ObjectHandle _pastrk      = NULL;
+
+static S52ObjectHandle _leglin1     = NULL;
+static S52ObjectHandle _leglin2     = NULL;
+static S52ObjectHandle _leglin3     = NULL;
+//static S52ObjectHandle _leglin4     = NULL;
+//static S52ObjectHandle _leglin5     = NULL;
+static S52ObjectHandle _waypnt0     = NULL;
+static S52ObjectHandle _waypnt1     = NULL;
+static S52ObjectHandle _waypnt2     = NULL;
+static S52ObjectHandle _waypnt3     = NULL;
+static S52ObjectHandle _waypnt4     = NULL;
+static S52ObjectHandle _wholin      = NULL;
+
+static S52ObjectHandle _clrlin      = NULL;
+
+//static S52ObjectHandle _marfea_area = NULL;
+//static S52ObjectHandle _marfea_line = NULL;
+static S52ObjectHandle _marfea_point = NULL;
+*/
+
+
+    //* S52 Mariner Obj cleanup by hand - S52_done() do that too
     _ownshp      = S52_delMarObj(_ownshp);
-    _vrmeblA     = S52_delMarObj(_vrmeblA);
-    _vrmeblB     = S52_delMarObj(_vrmeblB);
-    _vessel_arpa = S52_delMarObj(_vessel_arpa);
+    //_vrmeblA     = S52_delMarObj(_vrmeblA);  // broken
+    //_vrmeblB     = S52_delMarObj(_vrmeblB);
+    //_vessel_arpa = S52_delMarObj(_vessel_arpa);
     _vessel_ais  = S52_delMarObj(_vessel_ais);
     _pastrk      = S52_delMarObj(_pastrk);
     _leglin1     = S52_delMarObj(_leglin1);
     _leglin2     = S52_delMarObj(_leglin2);
     _leglin3     = S52_delMarObj(_leglin3);
     _clrlin      = S52_delMarObj(_clrlin);
+    _marfea_point= S52_delMarObj(_marfea_point);
+    //*/
 
 #ifdef USE_AIS
     s52ais_doneAIS();
@@ -1925,7 +1970,8 @@ exit:
 
     S52_done();
 
-    g_timer_destroy(_timer);
+    // debug
+    //g_timer_destroy(_timer);
 
     //g_mem_profile();
 

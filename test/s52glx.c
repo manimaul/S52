@@ -25,11 +25,17 @@
 
 #include "S52.h"
 
-#include <X11/Xlib.h>   // X*()
-#include <GL/glx.h>     // glX*()
+#include <X11/Xlib.h>          // X*()
+#include <X11/XKBlib.h>        // Xkb*()
+#include <X11/keysymdef.h>
 
-#include <stdio.h>      // printf()
-#include <stdlib.h>     // exit(0)
+#include <GL/glx.h>            // glX*()
+
+#include <stdio.h>             // printf()
+#include <stdlib.h>            // exit()
+
+#define WIDTH  800
+#define HEIGHT 600
 
 static int _attr[] = {
     GLX_RGBA,
@@ -96,10 +102,12 @@ static Window       _setXwin(Display *dpy, XVisualInfo *visInfo)
 
     swa.colormap     = cmap;
     swa.border_pixel = 0;
-    swa.event_mask   = ExposureMask | ButtonPressMask | StructureNotifyMask;
+    //swa.event_mask   = ExposureMask | ButtonPressMask | StructureNotifyMask;
+    //swa.event_mask   = ExposureMask | StructureNotifyMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
+    swa.event_mask   = ExposureMask | StructureNotifyMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask;
 
     win = XCreateWindow(dpy, win, 
-                        0, 0, 800, 600, 0, visInfo->depth,
+                        0, 0, WIDTH, HEIGHT, 0, visInfo->depth,
                         InputOutput, visInfo->visual,
                         CWBorderPixel | CWColormap | CWEventMask, &swa);
 
@@ -162,6 +170,7 @@ int main(int argc, char* argv[])
         S52_init(w, h, wmm, hmm, NULL);
     }
 
+    S52_setViewPort(0, 0, WIDTH, HEIGHT);
     S52_loadCell(NULL, NULL);
 
     { // main loop
@@ -171,19 +180,33 @@ int main(int argc, char* argv[])
                 XNextEvent(dpy, &event);
                 switch (event.type) {
                 case ConfigureNotify: break;
-                case GraphicsExpose:
-                    S52_setViewPort(0, 0, event.xconfigure.width, event.xconfigure.height); break;
+                //case GraphicsExpose:
+                //    S52_setViewPort(0, 0, event.xconfigure.width, event.xconfigure.height); break;
                 //case ...
 
+                case KeyPress:
+                case KeyRelease:
+                    {
+                        unsigned int keycode = ((XKeyEvent *)&event)->keycode;
+                        unsigned int keysym  = XkbKeycodeToKeysym(dpy, keycode, 0, 1);
+
+                        // ESC - quit
+                        if (XK_Escape == keysym) {
+                            goto exit;
+                        }
+                    }
                 }
             } while (XPending(dpy));
             S52_draw();
-            // FIXME
-            //S52_drawLast();
+            S52_drawLast();  // nothing to do
 
             glXSwapBuffers(dpy,  win);
         }
     }
+
+exit:
+
+    XKillClient(dpy, win);
 
     S52_done();
 

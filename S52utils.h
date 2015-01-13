@@ -25,7 +25,7 @@
 #ifndef _S52UTILS_H_
 #define _S52UTILS_H_
 
-#include "S52.h"          // S52_error_cb
+#include "S52.h"          // S52_log_cb
 
 #include <glib.h>         // g_print()
 
@@ -39,30 +39,34 @@
     // well should be cc
 #define PRINTF printf(__FILE__":%i: : ", __LINE__),printf
 
-#else
+#else  // SOLARIS
 
-#ifdef S52_DEBUG
+#if defined(S52_DEBUG) || defined(S52_USE_LOG)
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 
 void _printf(const char *file, int line, const char *function, const char *frmt, ...);
 #define PRINTF(...) _printf(__FILE__, __LINE__, __FUNCTION__, __VA_ARGS__)
-#else    // S52_DEBUG
+#else    // S52_DEBUG  S52_USE_LOG
 #define PRINTF(...)
-#endif  // S52_DEBUG
+#endif  // S52_DEBUG  S52_USE_LOG
+
 #endif  // SOLARIS
 
 #ifdef S52_USE_GLIB2
-#define SPRINTF g_sprintf
+//#define SNPRINTF g_snprintf
+#define SNPRINTF(b,n,f, ...) if (n <= g_snprintf(b,n,f,__VA_ARGS__)) {PRINTF("WARNING: str overflow\n");g_assert(0);}
 #else
-#define SPRINTF sprintf
+#define SNPRINTF snprintf
 #endif
 
-#define return_if_null(ptr) if (NULL==ptr) {                             \
-                                PRINTF("WARNING: '%s' is NULL\n", #ptr); \
-                                return FALSE;                            \
-                            }
+#define return_if_null(ptr)                  \
+if (NULL==ptr) {                             \
+    PRINTF("WARNING: '%s' is NULL\n", #ptr); \
+    g_assert(0);                             \
+    return FALSE;                            \
+}
 
 
 #define cchar const char
@@ -80,19 +84,21 @@ typedef char    valueBuf[MAXL];
 
 int      S52_getConfig(const char *label, valueBuf *vbuf);
 
-double   S52_atof   (const char *str);
 int      S52_atoi   (const char *str);
+double   S52_atof   (const char *str);
 size_t   S52_strlen (const char *str);
-char*    S52_strstr (const char *haystack, const char *needle);
+char    *S52_strstr (const char *haystack, const char *needle);
 gint     S52_strncmp(const char *s1, const char *s2, gsize n);
-FILE *   S52_fopen  (const char *filename, const char *mode);
+FILE    *S52_fopen  (const char *filename, const char *mode);
 int      S52_fclose (FILE *fd);
+
 gboolean S52_string_equal(const GString *v, const GString *v2);
 
 void     S52_tree_replace(GTree *tree, gpointer key, gpointer value);
 
-int      S52_initLog(S52_error_cb err_cb);
-int      S52_doneLog();
+cchar   *S52_utils_version(void);
+int      S52_initLog(S52_log_cb log_cb);
+int      S52_doneLog(void);
 
 
 
@@ -100,6 +106,8 @@ int      S52_doneLog();
 //
 // Other trick that could be usefull
 //
+
+
 
 // quiet compiler warning on unused param
 #define UNUSED(expr) do { (void)(expr); } while (0)

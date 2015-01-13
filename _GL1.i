@@ -128,8 +128,8 @@ static const GLubyte _nodata_mask[4*32] = {
 ////////////////////////////////////////////////////////
 // forward decl
 static double      _getGridRef(S52_obj *, double *, double *, double *, double *, double *, double *);
-static int         _fillarea(S57_geo *);
-static int         _glCallList(S52_DListData *);
+static int         _fillArea(S57_geo *);
+static int         _glCallList(S52_DList *);
 static GLubyte     _glColor4ub(S52_Color *);
 static int         _pushScaletoPixel(int);
 static int         _popScaletoPixel(void);
@@ -231,7 +231,6 @@ static GLint     _initFTGL(void)
     //const char *file = "arial.ttf";
     //const char *file = "DejaVuSans.ttf";
     //const char *file = "Trebuchet_MS.ttf";
-    //const gchar *file = "Waree.ttf";
     const gchar *file = "Waree.ttf";
     // from Navit
     //const char *file = "LiberationSans-Regular.ttf";
@@ -247,11 +246,28 @@ static GLint     _initFTGL(void)
     _ftglFont[2] = ftglCreatePixmapFont(file);
     _ftglFont[3] = ftglCreatePixmapFont(file);
 
-    ftglSetFontFaceSize(_ftglFont[0], 12, 12);
-    ftglSetFontFaceSize(_ftglFont[1], 14, 14);
-    ftglSetFontFaceSize(_ftglFont[2], 16, 16);
-    ftglSetFontFaceSize(_ftglFont[3], 20, 20);
+    //ftglSetFontFaceSize(_ftglFont[0], 12, 12);
+    //ftglSetFontFaceSize(_ftglFont[1], 14, 14);
+    //ftglSetFontFaceSize(_ftglFont[2], 16, 16);
+    //ftglSetFontFaceSize(_ftglFont[3], 20, 20);
 
+    //*
+    int basePtSz = 12.0 / (S52_MP_get(S52_MAR_DOTPITCH_MM_X) / 0.3);
+    ftglSetFontFaceSize(_ftglFont[0], basePtSz + 0, 72);
+    ftglSetFontFaceSize(_ftglFont[1], basePtSz + 2, 72);
+    ftglSetFontFaceSize(_ftglFont[2], basePtSz + 4, 72);
+    ftglSetFontFaceSize(_ftglFont[3], basePtSz + 8, 72);
+    //*/
+
+    /*
+    // dpi has no effect!
+    //int dpi = 72;
+    int dpi = 400;
+    ftglSetFontFaceSize(_ftglFont[0], 12, dpi);
+    ftglSetFontFaceSize(_ftglFont[1], 14, dpi);
+    ftglSetFontFaceSize(_ftglFont[2], 16, dpi);
+    ftglSetFontFaceSize(_ftglFont[3], 20, dpi);
+    //*/
 
     return TRUE;
 }
@@ -292,8 +308,8 @@ static int       _initCOGL(void)
 
 static int       _renderAP_NODATA_gl1(S52_obj *obj)
 {
-    S57_geo       *geoData   = S52_PL_getGeo(obj);
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S57_geo   *geoData   = S52_PL_getGeo(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
     if (NULL != DListData) {
         S52_Color *col = DListData->colors;
@@ -302,7 +318,7 @@ static int       _renderAP_NODATA_gl1(S52_obj *obj)
         glEnable(GL_POLYGON_STIPPLE);
         glPolygonStipple(_nodata_mask);
 
-        _fillarea(geoData);
+        _fillArea(geoData);
 
         glDisable(GL_POLYGON_STIPPLE);
 
@@ -314,8 +330,8 @@ static int       _renderAP_NODATA_gl1(S52_obj *obj)
 
 static int       _renderAP_DRGARE_gl1(S52_obj *obj)
 {
-    S57_geo       *geoData   = S52_PL_getGeo(obj);
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S57_geo   *geoData   = S52_PL_getGeo(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
     if (NULL != DListData) {
         S52_Color *col = DListData->colors;
@@ -324,7 +340,7 @@ static int       _renderAP_DRGARE_gl1(S52_obj *obj)
         glEnable(GL_POLYGON_STIPPLE);
         glPolygonStipple(_drgare_mask);
 
-        _fillarea(geoData);
+        _fillArea(geoData);
 
         glDisable(GL_POLYGON_STIPPLE);
         return TRUE;
@@ -380,23 +396,10 @@ static int       _renderAP_gl1(S52_obj *obj)
                 if (0==g_strcmp0("M_CSCL", S52_PL_getOBCL(obj)) ) {
                     //_renderAP_NODATA(obj);
                     return TRUE;
-                } else {
-                    // fill area with
-                    if (0==g_strcmp0("M_QUAL", S52_PL_getOBCL(obj)) ) {
-                        //_renderAP_NODATA(obj);
-                        return TRUE;
-                    }
                 }
             }
         }
         */
-    }
-
-    // fill area with
-    if (0==g_strcmp0("M_QUAL", S52_PL_getOBCL(obj)) ) {
-        //_renderAP_NODATA(obj);
-        //return TRUE;
-        PRINTF("M_QUAL\n");
     }
 
     // Bec      pattern stencil
@@ -444,7 +447,7 @@ static int       _renderAP_gl1(S52_obj *obj)
 
         // fill stencil
         S57_geo *geoData = S52_PL_getGeo(obj);
-        _fillarea(geoData);
+        _fillArea(geoData);
 
         // setup stencil to clip pattern
         // all color to pass stencil filter
@@ -499,7 +502,7 @@ static int       _renderAP_gl1(S52_obj *obj)
     double hw = tileHeightPix * _scaley;  // pattern height in world
     double d  = stagOffsetPix * _scalex;  // stag offset in world
 
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
     glMatrixMode(GL_MODELVIEW);
 

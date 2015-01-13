@@ -42,12 +42,12 @@ static pt3    _pcin;
 
 ////////////////////////////////////////////////////
 //
-// Quadric (by hand)
+// Quadric (by hand to fill VBO)
 //
 
-// Make it not a power of two to avoid cache thrashing on the chip
 #ifdef S52_USE_OPENGL_VBO
 
+// Make it not a power of two to avoid cache thrashing on the chip
 #define CACHE_SIZE    240
 
 #undef  PI
@@ -206,8 +206,6 @@ static int       _gluQuadricDrawStyle(_GLUquadricObj* qobj, GLint style)
 {
     qobj->style = style;
 
-    //g_assert(0);
-
     return TRUE;
 }
 #endif  // S52_USE_OPENGL_VBO
@@ -230,23 +228,23 @@ static int       _getMaxEdge(pt3 *p)
 
 static void_cb_t _tessError(GLenum err)
 {
+#ifdef S52_DEBUG
     //const GLubyte *str = gluErrorString(err);
     const char *str = "FIXME: no gluErrorString(err)";
-
     PRINTF("%s (%d)\n", str, err);
+#endif
 
     g_assert(0);
 }
 
 static void_cb_t _quadricError(GLenum err)
 {
-
+#ifdef S52_DEBUG
     //const GLubyte *str = gluErrorString(err);
     const char *str = "FIXME: no gluErrorString(err)";
-
     PRINTF("QUADRIC ERROR:%s (%d) (%0x)\n", str, err, err);
+#endif
 
-    // FIXME
     g_assert(0);
 }
 
@@ -347,13 +345,6 @@ static void_cb_t _vertex3d(GLvoid *data, S57_prim *prim)
     return;
 }
 
-static void_cb_t _vertex3f(GLvoid *data, S57_prim *prim)
-// float - use by symb from _parseHPGL() (so vertex are from the PLib and allready in float)
-// store float vertex of primitive other than AREA
-{
-    S57_addPrimVertex(prim, (vertex_t*)data);
-}
-
 static void_cb_t _vertexCen(GLvoid *data)
 {
     pt3 *p = (pt3*) data;
@@ -380,7 +371,6 @@ static void_cb_t _vertexCin(GLvoid *data)
 
 static GLint     _initGLU(void)
 // initialize various GLU object
-//
 {
 
     ////////////////////////////////////////////////////////////////
@@ -419,6 +409,7 @@ static GLint     _initGLU(void)
         //gluTessProperty(_tobj, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_NEGATIVE);
         //gluTessProperty(_tobj, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_ABS_GEQ_TWO);
 
+        // Note: tolerance not implemented in libtess
         //gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.00001);
         //gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.1);
 
@@ -451,7 +442,9 @@ static GLint     _initGLU(void)
         //gluTessProperty(_tcen, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_NEGATIVE);
         gluTessProperty(_tcen, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_ABS_GEQ_TWO);
         gluTessProperty(_tcen, GLU_TESS_BOUNDARY_ONLY, GLU_TRUE);
-        gluTessProperty(_tcen, GLU_TESS_TOLERANCE, 0.000001);
+
+        // Note: tolerance not implemented in libtess
+        //gluTessProperty(_tcen, GLU_TESS_TOLERANCE, 0.000001);
 
         gluTessCallback(_tcen, GLU_TESS_BEGIN,  (f)_beginCen);
         gluTessCallback(_tcen, GLU_TESS_END,    (f)_endCen);
@@ -472,7 +465,9 @@ static GLint     _initGLU(void)
 
         //gluTessProperty(_tcin, GLU_TESS_WINDING_RULE, GLU_TESS_WINDING_ODD);
         gluTessProperty(_tcin, GLU_TESS_BOUNDARY_ONLY, GLU_FALSE);
-        gluTessProperty(_tcin, GLU_TESS_TOLERANCE, 0.000001);
+
+        // Note: tolerance not implemented in libtess
+        //gluTessProperty(_tcin, GLU_TESS_TOLERANCE, 0.000001);
 
         gluTessCallback(_tcin, GLU_TESS_BEGIN,     (f)_beginCin);
         gluTessCallback(_tcin, GLU_TESS_END,       (f)_endCin);
@@ -483,14 +478,12 @@ static GLint     _initGLU(void)
 
         // set poly in x-y plane normal is Z (for performance)
         gluTessNormal(_tcin, 0.0, 0.0, 1.0);
-
     }
 
     ////////////////////////////////////////////////////////////////
     //
     // init quadric stuff
     //
-
     {
 #ifdef S52_USE_OPENGL_VBO
         _qobj = _gluNewQuadric();
@@ -515,8 +508,8 @@ static GLint     _freeGLU(void)
 {
     //tess
     if (_tmpV) g_ptr_array_free(_tmpV, TRUE);
-    //if (tmpV) g_ptr_array_unref(tmpV);
     if (_tobj) gluDeleteTess(_tobj);
+
 #ifdef S52_USE_OPENGL_VBO
     if (_qobj) _gluDeleteQuadric(_qobj);
 #else

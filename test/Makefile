@@ -32,12 +32,9 @@ MINGW = /usr/bin/i586-mingw32msvc-
 s52win32 : CC = $(MINGW)gcc -O0 -g -Wall -DG_DISABLE_ASSERT -D_MINGW -m32
 #s52win32 : CC = $(MINGW)g++ -std=c99 -O0 -g -Wall -DG_DISABLE_ASSERT -D_MINGW
 s52win32 : CXX = $(MINGW)g++ -O0 -g -Wall -DG_DISABLE_ASSERT -D_MINGW -m32
-s52win32 : GTKPATH   = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/bin
-s52win32 : GTKGLPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtkglext-win32-1.0.6/bin
 
 s52eglw32 : CC  = $(MINGW)gcc -O0 -g -Wall -DG_DISABLE_ASSERT -D_MINGW -m32
 s52eglw32 : CXX = $(MINGW)g++ -O0 -g -Wall -DG_DISABLE_ASSERT -D_MINGW -m32
-s52eglw32 : GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32
 
 # NOTE: -malign-double: for 32bits system --useless on 64its
 # NOTE: GV_USE_DOUBLE_PRECISION_COORD not needed directly for S52
@@ -65,19 +62,25 @@ s52eglw32 : GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-201009
 # -DS52_USE_SOCK      - in s52ais.c when build with S52AIS_STANDALONE use socket to call libS52
 # -DS52_USE_RADAR     - when in RADAR mode
 
-CFLAGS = -I.. `pkg-config --cflags gtk+-2.0 gtkglext-1.0 gl` -DS52_USE_GLIB2
+#CFLAGS = -I.. `pkg-config --cflags gtk+-2.0 gtkglext-1.0 gl` -DS52_USE_GLIB2 -DUSE_FAKE_AIS
+CFLAGS = -I.. `pkg-config --cflags gtk+-2.0 gtkglext-1.0 gl` -DS52_USE_GLIB2 -DUSE_AIS
 
 s52gtk2gl2 : CFLAGS = -I.. `pkg-config --cflags gtk+-2.0 gtkglext-1.0` \
                       -DS52_USE_GLIB2                                  \
                       -DS52_USE_GL2                                    \
-                      -DS52_USE_MESA3D
+                      -DS52_USE_MESA3D -DUSE_AIS
 
 s52gtk2gps: CFLAGS += -DS52GTK2_USE_GPSD -DS52_USE_DBUS `pkg-config --cflags --libs glib-2.0 libgps dbus-1 dbus-glib-1`
 
 s52glx:     CFLAGS = -I.. `pkg-config --cflags gl`
 
 s52eglx:    CFLAGS = -I.. -I. `pkg-config --cflags egl glib-2.0 gthread-2.0 gobject-2.0 libgps`   \
-                     -DS52_USE_GLES2 -DS52_USE_EGL -DS52_USE_AFGLOW -DUSE_AIS -DS52_USE_MESA3D -DSET_SCREEN_SIZE
+                     -DS52_USE_EGL           \
+                     -DS52_USE_GLES2         \
+                     -DS52_USE_MESA3D        \
+                     -DSET_SCREEN_SIZE       \
+                     -DUSE_AIS               \
+                     -DS52_USE_AFGLOW
 
 # same as s52eglx, but "gtk+-2.0" is added - no AIS
 s52gtk2egl: CFLAGS = -I.. -I. `pkg-config --cflags egl glib-2.0 gthread-2.0 gobject-2.0 gtk+-2.0` \
@@ -86,7 +89,7 @@ s52gtk2egl: CFLAGS = -I.. -I. `pkg-config --cflags egl glib-2.0 gthread-2.0 gobj
 s52gtk3egl: CFLAGS = -I.. -I. `pkg-config --cflags egl glib-2.0 gthread-2.0 gobject-2.0 gtk+-3.0` \
                      -DS52_USE_SOCK -DS52_USE_AFGLOW -DS52_USE_EGL -DS52_USE_GLES2
 
-s52gv:      CFLAGS = `gtk-config --cflags` `glib-config --cflags`     \
+s52gv:      CFLAGS = `gtk-config --cflags` `glib-config --cflags`      \
                       -I$(OPENEV_HOME) -DGV_USE_DOUBLE_PRECISION_COORD \
                       -I.. -DS52_USE_GV
 
@@ -162,8 +165,8 @@ s52gv2: s52gv.c
 testmain:
 	$(CC) $(LDFLAGS) testmain.o $(LIBS)  -o $@
 
-s52gtk2 s52gtk2gl2: s52gtk2.c ../S52.h
-	$(CC) $(CFLAGS) s52gtk2.c $(S52_LIBS) $(GTK2LIBS) -o $@
+s52gtk2 s52gtk2gl2: s52gtk2.c s52ais.c ../S52.h
+	$(CC) $(CFLAGS) s52gtk2.c s52ais.c $(S52_LIBS) $(GTK2LIBS) `pkg-config --cflags --libs libgps` -o $@
 
 #libs52gps.so: s52gps.h s52gps.c
 #	$(CC) $(CFLAG) -fPIC -shared -I.. s52gps.c `pkg-config --cflags --libs glib-2.0 libgps dbus-1 dbus-glib-1` -o $@
@@ -186,43 +189,6 @@ s52gtk2p: s52gtk2.c ../S52.h
 #$(CC) $(CFLAGS) -nodefaultlibs -nostartfiles s52gtk2.c ../*.o $(LIBS) -lproj -llcms -o $@
 
 
-############### DEPRECATED build: Android (Android.mk do the build now) ##############################
-
-android/dist/sdcard/s52droid/UI.xml: android/dist/sdcard/s52droid/UI.tmpl.xml
-	awk 'BEGIN { count_text    = 0;                                             \
-                 count_border  = 0;                                             \
-                 start_comment = 0;                                             \
-               }                                                                \
-               /^$$/  { getline;           }                                    \
-               /<!--/ { start_comment = 1; }                                    \
-               {                                                                \
-                if (start_comment == 1) {                                       \
-                  if ($$0 ~ /-->/) { start_comment = 0; }                       \
-                } else {                                                        \
-                  if ($$0 ~ /@\+id\/s52_text_/) {                               \
-                    str = "s52_text_" count_text++;                             \
-                    sub(/s52_text_/, str, $$0);                                 \
-                  }                                                             \
-                  if ($$0 ~ /@id\/s52_text_/) {                                 \
-                    str = "s52_text_" count_text-2;                             \
-                    sub(/s52_text_/, str, $$0);                                 \
-                  }                                                             \
-                  if ($$0 ~ /s52_border_/) {                                    \
-                    sub(/s52_border_/, "s52_border_" count_border++, $$0);      \
-                  }                                                             \
-                  print $$0;                                                    \
-                }                                                               \
-               }                                                                \
-    END { print("#define NBR_TEXT   ", count_text,   "// grep s52_text_   UI.xml" ) >  "sl4agps.cfg";   \
-          print("#define NBR_BORDER ", count_border, "// grep s52_border_ UI.xml" ) >> "sl4agps.cfg";   \
-        }'                                                                                              \
-    android/dist/sdcard/s52droid/UI.tmpl.xml > android/dist/sdcard/s52droid/UI.xml
-	adb push  android/dist/sdcard/s52droid/UI.xml /sdcard/s52droid/UI.xml
-
-sl4agps.cfg:
-	-rm android/dist/sdcard/s52droid/UI.xml
-
-
 ############### profiling ##############################
 #
 #
@@ -237,53 +203,74 @@ run: s52gtk2
 
 # watch ps -C s52gtk2 -o pid,ppid,rss,vsize,pcpu,pmem,time,cmd
 # watch ps -C s52gps  -o pid,ppid,rss,vsize,pcpu,pmem,time,cmd
-# watch ps -C s52eglx  -o pid,ppid,rss,vsize,pcpu,pmem,time,cmd
+# watch ps -C s52eglx -o pid,ppid,rss,vsize,pcpu,pmem,time,cmd
 
 
 ########### WIN32 STUFF ####################################
 #
 #
-s52win32: LIBS = $(S52_LIBS) -L$(GTKPATH) -L$(GTKGLPATH)         \
-                 -lgtk-win32-2.0-0 -lgdk-win32-2.0-0             \
-                 -lgtkglext-win32-1.0-0 -lgdkglext-win32-1.0-0   \
-                 -lglib-2.0-0 -lgobject-2.0-0 -lglu32 -lopengl32 \
-                 -lgthread-2.0-0
 
-s52eglw32: LIBS = $(S52_LIBS) -L$(GTKPATH)/bin                \
+# test for Wine crash
+#s52win32: LIBWIN32PATH = $(HOME)/dev/gis/openev-cvs/mingw
+#s52win32: GTKPATH      = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/bin
+#s52win32: GTKGLPATH    = $(HOME)/dev/gis/openev-cvs/mingw/gtkglext-win32-1.0.6/bin
+#s52win32: LIBS = $(S52_LIBS)                                     \
+#                 -L$(GTKPATH)                                    \
+#                 -lglib-2.0-0 -lgobject-2.0-0 -lgthread-2.0-0    \
+#                 -lgtk-win32-2.0-0 -lgdk-win32-2.0-0             \
+#                 -lfreetype6                                     \
+#                 -L$(GTKGLPATH)                                  \
+#                 -lgtkglext-win32-1.0-0 -lgdkglext-win32-1.0-0   \
+#                 $(LIBWIN32PATH)/libproj.a                       \
+#                 $(LIBWIN32PATH)/libftgl.a                       \
+#                 $(LIBWIN32PATH)/libgdal-1.dll                   \
+#                 $(LIBWIN32PATH)/liblcms-1.dll                   \
+#                 -lglu32 -lopengl32
+
+s52win32: GTKPATH   = $(HOME)/dev/gis/openev-cvs/mingw/gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/lib
+s52win32: GTKGLPATH = $(HOME)/dev/gis/openev-cvs/mingw/gtkglext-2011/bin
+s52win32: LIBS = $(S52_LIBS)                                     \
+                 -L$(GTKPATH)                                    \
+                 $(GTKPATH)/gtk-win32-2.0.lib $(GTKPATH)/gdk-win32-2.0.lib                 \
+                 $(GTKPATH)/glib-2.0.lib $(GTKPATH)/gobject-2.0.lib $(GTKPATH)/gthread-2.0.lib          \
+                 -L$(GTKGLPATH)                                  \
+                 -lgtkglext-win32-1.0-0 -lgdkglext-win32-1.0-0   \
+                 -lglu32 -lopengl32
+
+s52eglw32: GTKPATH = $(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/bin
+s52eglw32: LIBS = $(S52_LIBS) -L$(GTKPATH)                    \
                  -lgtk-win32-2.0-0 -lgdk-win32-2.0-0          \
                  -lglib-2.0-0 -lgobject-2.0-0 -lgthread-2.0-0 \
-				 $(GTKPATH)/../libEGL.lib
+                 $(GTKPATH)/../libEGL.lib
 
 #../../../mingw/libgps.a
 
 
-s52win32: CFLAGS = -DS52_USE_GTK2                                                                            \
-                   -DS52_USE_GLIB2                                                                           \
+s52win32: CFLAGS = -DS52_USE_GLIB2 -DUSE_FAKE_AIS                                                            \
                    -mms-bitfields                                                                            \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/include/gtk-2.0      \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/include/cairo        \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/include/pango-1.0    \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/include/atk-1.0      \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtk+-bundle_2.16.6-20100912_win32/lib/gtk-2.0/include  \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtkglext-win32-1.0.6/include/gtkglext-1.0              \
-                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtkglext-win32-1.0.6/lib/gtkglext-1.0/include
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/gtk-2.0      \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/glib-2.0     \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/cairo        \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/pango-1.0    \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/include/atk-1.0      \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/lib/glib-2.0/include \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw//gtk+-2.16/gtk+-bundle_2.16.6-20100912_win32/lib/gtk-2.0/include  \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtkglext-2011/include/gtkglext-1.0              \
+                   -I$(HOME)/dev/gis/openev-cvs/mingw/gtkglext-2011/lib/gtkglext-1.0/include
 
-s52eglw32:CFLAGS = -DS52_USE_GTK2                    \
-                   -DS52_USE_GLIB2                   \
+s52eglw32:CFLAGS = -DS52_USE_GLIB2                   \
                    -mms-bitfields                    \
                    -I$(GTKPATH)/../include           \
                    -I$(GTKPATH)/include/gtk-2.0      \
                    -I$(GTKPATH)/include/glib-2.0     \
-				   -I$(GTKPATH)/include/cairo        \
-				   -I$(GTKPATH)/include/pango-1.0    \
-				   -I$(GTKPATH)/include/atk-1.0      \
+                   -I$(GTKPATH)/include/cairo        \
+                   -I$(GTKPATH)/include/pango-1.0    \
+                   -I$(GTKPATH)/include/atk-1.0      \
                    -I$(GTKPATH)/lib/glib-2.0/include \
                    -I$(GTKPATH)/lib/gtk-2.0/include
 
 s52win32: s52gtk2.c ../S52.h
-	$(CC) $(CFLAGS) -I.. s52gtk2.c $(LIBS) -o s52gtk2.exe
+	$(CXX) $(CFLAGS) -I.. s52gtk2.c $(LIBS) -o s52gtk2.exe
 
 s52win32gps: libs52gps.dll s52gtk2.c  ../S52.h
 	$(CXX) $(CFLAGS) -I.. s52gtk2.c $(LIBS) -L. -llibs52gps -o s52gtk2gps.exe
@@ -314,6 +301,10 @@ s52clutter.js: S52-1.0.typelib
 S52-1.0.h: ../S52.h libS52-1.0.so
 	cp ../S52.h $@
 
+libS52-1.0.so: ../libS52.so ../S52.h
+	cp  ../libS52.so libS52-1.0.so
+	sudo cp  libS52-1.0.so $(GNOME3_SHELL_LIBS)
+
 S52-1.0.gir: S52-1.0.h libS52-1.0.so
 	$(GNOME3_SHELL_RUN) g-ir-scanner           \
         -DS52_USE_FTGL                         \
@@ -334,10 +325,6 @@ S52-1.0.gir: S52-1.0.h libS52-1.0.so
 S52-1.0.typelib: S52-1.0.gir
 	$(GNOME3_SHELL_RUN) g-ir-compiler S52-1.0.gir -o $@
 	sudo cp S52-1.0.typelib $(GNOME3_SHELL_LIBS)/girepository-1.0/
-
-libS52-1.0.so: ../libS52.so ../S52.h
-	cp  ../libS52.so libS52-1.0.so
-	sudo cp  libS52-1.0.so $(GNOME3_SHELL_LIBS)
 
 
 ############### clean up ##############################

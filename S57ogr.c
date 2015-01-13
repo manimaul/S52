@@ -21,7 +21,8 @@
 */
 
 
-#include "S57ogr.h"     // S57_geo
+#include "S57ogr.h"     // --
+
 #include "S52utils.h"   // PRINTF()
 #include "ogr_api.h"    // OGR*
 
@@ -116,11 +117,13 @@ static int        _ogrLoadCell(const char *filename, S52_loadLayer_cb loadLayer_
     if (NULL == loadLayer_cb) {
         PRINTF("ERROR: should be using default S52_loadLayer() callback\n");
         g_assert(0);
+        return FALSE;
     }
 
     if (NULL == loadObject_cb) {
         PRINTF("ERROR: should be using default S52_loadObject_cb() callback\n");
         g_assert(0);
+        return FALSE;
     }
 
     //_loadAux(hDS);
@@ -152,6 +155,7 @@ int            S57_ogrLoadCell(const char *filename, S52_loadLayer_cb loadLayer_
     if (sizeof(geocoord) != sizeof(double)) {
         PRINTF("ERROR: sizeof(geocoord) != sizeof(double)\n");
         g_assert(0);
+        return FALSE;
     }
 
     OGRRegisterAll();
@@ -303,6 +307,7 @@ static S57_geo   *_ogrLoadObject(const char *objname, void *feature, OGRGeometry
                     PRINTF("ERROR: S-57 ring (AREA) not closed (%s)\n", objname);
 
                     g_assert(0);
+                    continue;
 
                     // Note: to compute area of an open poly
                     //double area = 0;
@@ -324,13 +329,14 @@ static S57_geo   *_ogrLoadObject(const char *objname, void *feature, OGRGeometry
                 }
 
                 // CW if area is < 0, else CCW
-                PRINTF("AREA(ring=%i/%i): %s (%s)\n", iRing, nRingCount, (area <= 0.0) ? "CW" : "CCW", objname);
+                //PRINTF("AREA(ring=%i/%i): %s (%s)\n", iRing, nRingCount, (area <= 0.0) ? "CW" : "CCW", objname);
 
                 // CCW winding
                 if (area > 0.0) {
                     // if first ring reverse winding to CW
                     if (0==iRing) {
-                        PRINTF("DEBUG: reversing S-57 outer ring to CW (%s)\n", objname);
+                        // debug
+                        //PRINTF("DEBUG: reversing S-57 outer ring to CW (%s)\n", objname);
                         //g_assert(0);
                         for (guint node=0; node<vert_count; ++node) {
                             ringxyz[iRing][node*3+0] = OGR_G_GetX(hRing, vert_count - node-1);
@@ -355,7 +361,7 @@ static S57_geo   *_ogrLoadObject(const char *objname, void *feature, OGRGeometry
                         }
                     } else {
                         // if NOT first ring reverse winding (CCW)
-                        PRINTF("DEBUG: reversing S-57 inner ring to CCW (%s)\n", objname);
+                        //PRINTF("DEBUG: reversing S-57 inner ring to CCW (%s)\n", objname);
                         //g_assert(0);
 
                         for (guint node=0; node<vert_count; ++node) {

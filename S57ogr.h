@@ -25,10 +25,10 @@
 #ifndef _S57OGR_H_
 #define _S57OGR_H_
 
-#include "S57data.h"   // S57_geo
 #include "S52.h"       // S52_loadObject_cb()
+#include "S57data.h"   // S57_geo
 
-typedef int   (*S52_loadLayer_cb)(const char *layername, void *layer,    S52_loadObject_cb loadObject_cb);
+typedef int   (*S52_loadLayer_cb)(const char *layername, void *layer, S52_loadObject_cb loadObject_cb);
 
 int      S57_ogrLoadCell  (const char *filename,                  S52_loadLayer_cb  loadLayer_cb, S52_loadObject_cb loadObject_cb);
 int      S57_ogrLoadLayer (const char *layername, void *ogrlayer, S52_loadObject_cb loadObject_cb);

@@ -25,7 +25,7 @@
 #ifndef _S52PL_H_
 #define _S52PL_H_
 
-#include "S57data.h"     // S57_geo, S52_Obj_t
+#include "S57data.h"     // S57_geo, S57_Obj_t
 #include <glib.h>        // GString, GData, GArray
 
 #define S52_PL_NMLN   6  // lookup name lenght
@@ -87,9 +87,9 @@ typedef enum S52_CmdWrd {
     S52_CMD_TXT_TE,     // TE --SHOWTEXT
     S52_CMD_SYM_PT,     // SY --SHOWPOINT
     S52_CMD_SIM_LN,     // LS --SHOWLINE
-    S52_CMD_COM_LN,     // LC --SHOWLINE
-    S52_CMD_ARE_CO,     // AC --SHOWAREA`
-    S52_CMD_ARE_PA,     // AP --SHOWAREA
+    S52_CMD_COM_LN,     // LC --SHOWLINE COMPLEX
+    S52_CMD_ARE_CO,     // AC --SHOWAREA
+    S52_CMD_ARE_PA,     // AP --SHOWAREA PATTERN
     S52_CMD_CND_SY,     // CS --CALLSYMPROC (Conditional Symbology)
 
     S52_CMD_OVR_PR      // OVERRIDE PRIORITY (not in S52specs).
@@ -103,11 +103,12 @@ typedef enum S52_CmdWrd {
 // color definition
 typedef struct S52_Color {
     //--- not S52 field --------
-    guchar   cidx;      // index of this color in table,
-    guchar   trans;     // place holder --command word can change this
-                        // so 'trans' is linked to an object not a color
-    char     pen_w;     // using VBO's we need to know this, Display List store this
-                        // but not VBO
+    // FIXME: index of a GArray - pointer arithmetic - so guchar must be conveted gpointer!
+    // #define g_ptr_array_index(array,index_) ((array)->pdata)[index_]
+    // so i * sizeof(S52_Color)
+    guchar   cidx;      // index of this color in palette [0..63], used as lookup when palette change
+    char     pen_w;     // using VBO's we need to know this, Display List store this but not VBO
+    char     trans;     // command word can change this so 'trans' is linked to an object not a color
     //--------------------------
 
     char     colName[S52_PL_COLN+1];   // '\0' terminated
@@ -120,16 +121,15 @@ typedef struct S52_Color {
 } S52_Color;
 
 // symbol's OpenGL Display List sub-list for color switch
-//#define MAX_SUBLIST 10  // ex: SCALEB10 need to switch color 9 times (2 colors)
-#define MAX_SUBLIST 11  // ex: SCALEB10 need to switch color 9 times (2 colors)
-//#define MAX_SUBLIST 21  // ex: SCALEB10 need to switch color 9 times (2 colors)
-typedef struct S52_DListData {
+#define MAX_SUBLIST 10  // ex: SCALEB10 need to switch color 9 times (2 colors)
+//#define MAX_SUBLIST 11  // ex: SCALEB10 need to switch color 9 times (2 colors)
+typedef struct S52_DList {
     int       create;                // TRUE create new DL
     guint     nbr;                   // number of Display List / VBO
     guint     vboIds[MAX_SUBLIST];   // array of starting index of Display List / VBO ids
     S52_Color colors[MAX_SUBLIST];   // color of each Display List / VBO
     S57_prim *prim  [MAX_SUBLIST];   // hold PLib sym prim info for VBO
-} S52_DListData;
+} S52_DList;
 
 // Vector Command (a la HPGL)
 typedef enum S52_vCmd {
@@ -154,13 +154,13 @@ typedef enum S52_vCmd {
     S52_VC_FP = 'F'     // fill polygone
 } S52_vCmd;
 
-// display supression flag
-typedef enum S52_objSup {
-    S52_SUP_OFF  = 0,    // initial object not supressed
-    S52_SUP_ON   = 1,    // display of object is supressed
-    S52_SUP_ERR  = 2     // object not found or not togglelable (displaybase)
+// display suppression flag
+typedef enum S52_objSupp {
+    S52_SUPP_OFF  = 0,    // initial object not suppressed
+    S52_SUPP_ON   = 1,    // display of object is suppressed
+    S52_SUPP_ERR  = 2     // object not found or not togglelable (displaybase)
 
-} S52_objSup;
+} S52_objSupp;
 
 typedef struct _S52_cmdDef S52_cmdDef;
 typedef struct _S52_vec    S52_vec;
@@ -175,14 +175,10 @@ int            S52_PL_done();
 
 // get RGB from color name, for the currently selected color table
 S52_Color     *S52_PL_getColor(const char *colorName);
-// get currently selected color table
-//GArray        *S52_PL_getColorTable();
-// return color at index, for the currently selected color table
-S52_Color     *S52_PL_getColorAt(guchar index);
 
 // get a rasterising rules for this S57 object
 S52_obj       *S52_PL_newObj(S57_geo *geoData);
-S57_geo       *S52_PL_delObj(S52_obj *obj);
+S57_geo       *S52_PL_delObj(S52_obj *obj, gboolean updateObjL);
 // get the geo part (S57) of this S52 object
 S57_geo       *S52_PL_getGeo(S52_obj *obj);
 S57_geo       *S52_PL_setGeo(S52_obj *obj, S57_geo *geoData);
@@ -212,15 +208,13 @@ const char    *S52_PL_getCMDstr(S52_obj *obj);
 S52_CmdWrd     S52_PL_iniCmd(S52_obj *obj);
 // get next command word in the list
 S52_CmdWrd     S52_PL_getCmdNext(S52_obj *obj);
-// not used
-S52_CmdWrd     S52_PL_getCrntCmd(S52_obj *obj);
 
 // compare name to parameter of current command word
 int            S52_PL_cmpCmdParam(S52_obj *obj, const char *name);
 // get str for the current command (PLib exposition field: LXPO/PXPO/SXPO)
 const char    *S52_PL_getCmdText(S52_obj *obj);
 
-S52_DListData *S52_PL_getDLData(S52_cmdDef *def);
+S52_DList     *S52_PL_getDLData(S52_cmdDef *def);
 
 //-------------------------------------------------------
 // init vector commands parser
@@ -229,10 +223,8 @@ S52_vec    *S52_PL_initVOCmd(S52_cmdDef *def);
 int         S52_PL_doneVOCmd(S52_vec *vecObj);
 // get (parse) next vector command, width in ASCII (1 pixel=0.32 mm)
 S52_vCmd    S52_PL_getNextVOCmd(S52_vec *vecObj);
-// get vextor for this command
+// get vector for this command
 S57_prim   *S52_PL_getVOprim(S52_vec *vecObj);
-// get pen width
-char        S52_PL_getVOwidth(S52_vec *vecObj);
 // get disk radius
 double      S52_PL_getVOradius(S52_vec *vecObj);
 // get vextex array
@@ -253,8 +245,6 @@ int            S52_PL_getSYspeed (S52_obj *obj, double *speed);
 // get Line Style data, width in ASCII (dotpitch 1 pixel=0.32 mm) for a S52/IHO display size viewed at 1 m.
 // Note: that it is more 'natural visualy', for a screen of 300ppi viewed at 10 cm, to go to a smaller dotpitch
 int            S52_PL_getLSdata(S52_obj *obj, char *pen_w, char *style, S52_Color **color);
-// set Line Complex data, width in ASCII (1 pixel=0.32 mm)
-int            S52_PL_setLCdata(S52_cmdDef *def, char pen_w);
 // get Line Complex data
 int            S52_PL_getLCdata(S52_obj *obj, double *symlen, char *pen_w);
 // get Area Color data
@@ -270,24 +260,16 @@ int            S52_PL_setAPtexID(S52_obj *obj, guint mask_texID);
 guint          S52_PL_getAPtexID(S52_obj *obj);
 #endif
 
-// get symbol offset
-//int        S52_PL_getSymOff(S52_cmdDef* def, int patt, int *off_x, int *off_y);
 // traverse a symbology table calling 'callback' for each entree
 gint           S52_PL_traverse(S52_SMBtblName tableNm, GTraverseFunc callBack);
-// return the number of entree in a symbology table
-//gint       S52_PL_getTableSz(S52_SMBtblName tableNm);
 
-// return a list of Display List --one per color
-S52_DListData *S52_PL_newDListData(S52_obj *obj);
-S52_DListData *S52_PL_getDListData(S52_obj *obj);
+// return a list of Display List --one per color/pen_w/trans
+S52_DList     *S52_PL_newDListData(S52_obj *obj);
+S52_DList     *S52_PL_getDListData(S52_obj *obj);
 
 // text parser
-//S52_Text  *S52_PL_parseTX(S57_geo *geoData, S52_CmdL *cmd);
-//S52_Text  *S52_PL_parseTE(S57_geo *geoData, S52_CmdL *cmd);
-//gint       S52_PL_getTEXT(S52_Text  *text, S52_Color **col,
 const char    *S52_PL_getEX(S52_obj *obj, S52_Color **col,
                                int *xoffs, int *yoffs, unsigned int *bsize, unsigned int *weight, int *dis);
-//gint       S52_PL_doneTXT(S52_Text *text);
 
 // TRUE: flag to run the text parser again
 int            S52_PL_resetParseText(S52_obj *obj);
@@ -302,21 +284,11 @@ int            S52_PL_hasLC(S52_obj *obj);
 // return CS name if this object has CS (Conditional Symbology) else NULL
 const char    *S52_PL_hasCS(S52_obj *obj);
 
-
-// get new display priority
-//S52_disPrio S52_PL_getOPprio(S52_obj *obj);
-
-// toggle display supression of this object
-//S52_objSup S52_PL_toggleObjSUP(S52_obj *obj);
-
-// toggle display supression of this type of object
-//S52_objSup     S52_PL_toggleObjType(S52_obj *obj);
-
 // toggle display suppression of this class of object
-S52_objSup     S52_PL_toggleObjClass(const char *className);
+S52_objSupp    S52_PL_toggleObjClass(const char *className);
 // get display state for this type of object
-S52_objSup     S52_PL_getToggleState(S52_obj *obj);
-S52_objSup     S52_PL_getObjClassState(const char *className);
+S52_objSupp    S52_PL_getObjToggleState(S52_obj *obj);
+S52_objSupp    S52_PL_getObjClassState(const char *className);
 
 int            S52_PL_resloveSMB(S52_obj *obj);
 
@@ -348,5 +320,13 @@ long           S52_PL_getTimeSec(S52_obj *obj);
 guint          S52_PL_getFreetypeGL_VBO(S52_obj *obj, guint *len);
 int            S52_PL_setFreetypeGL_VBO(S52_obj *obj, guint vboID, guint len);
 #endif
+
+//int            S52_PL_setLOD(S52_obj *obj, char LOD);
+//char           S52_PL_getLOD(S52_obj *obj);
+
+gboolean       S52_PL_setSupp(S52_obj *obj, gboolean supp);
+gboolean       S52_PL_getSupp(S52_obj *obj);
+
+S52_obj       *S52_PL_isObjValid(unsigned int objH);
 
 #endif // _S52PL_H_

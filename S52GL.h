@@ -62,11 +62,12 @@ typedef struct S52_GL_ras {
 } S52_GL_ras;
 
 typedef enum S52_GL_cycle {
-    S52_GL_NONE,
+    S52_GL_NONE,              // state between 2 cycles
     S52_GL_DRAW,              // normal  cycle - first pass draw layer 0-8
     S52_GL_LAST,              // normal  cycle - last/top/repeatable draw of layer 9
     S52_GL_BLIT,              // bitblit cycle - blit FB of first pass
-    S52_GL_PICK               // pick    cycle - cursor pick
+    S52_GL_PICK,              // pick    cycle - cursor pick
+    S52_GL_INIT               // state before first S52_GL_DRAW
 } S52_GL_cycle;
 
 int   S52_GL_init(void);
@@ -101,13 +102,12 @@ int   S52_GL_drawBlit(double scale_x, double scale_y, double scale_z, double nor
 int   S52_GL_end(S52_GL_cycle cycle);
 // ----------------------------------
 
-
 int   S52_GL_isSupp(S52_obj *obj);
-int   S52_GL_isOFFscreen(S52_obj *obj);
-
+//int   S52_GL_isOFFscreen(S52_obj *obj);
+int   S52_GL_isOFFview(S52_obj *obj);
 
 // delete GL data of object (DL of geo)
-int   S52_GL_del(S52_obj *obj);
+int   S52_GL_delDL(S52_obj *obj);
 // delete raster
 int   S52_GL_delRaster(S52_GL_ras *raster, int texOnly);
 
@@ -136,5 +136,7 @@ int   S52_GL_getStrOffset(double *offset_x, double *offset_y, const char *str);
 
 int   S52_GL_drawGraticule(void);
 int   S52_GL_movePoint(double *x, double *y, double angle, double dist_m);
+
+int   S52_GL_isHazard(int nxyz, double *xyz);
 
 #endif // _S52GL_H_

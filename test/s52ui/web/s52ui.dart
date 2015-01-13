@@ -204,7 +204,7 @@ void _updateAIS(int idx, TableCellElement c){
   int vesselSelect = ('block' == c.children[1].style.display) ? 1 : 2;
   // S57ID allway the first
   int S57ID        = int.parse(c.children[1].children[0].text);
-  s52.getMarObjH(S57ID).then((ret) {
+  s52.getMarObj(S57ID).then((ret) {
     // vesselTurn:129 - undefined
     s52.setVESSELstate(ret[0], vesselSelect, 0, 129).then((ret) {});
   });
@@ -798,7 +798,7 @@ void _watchPosition(int ownshpID) {
     return;
   }
 
-  // GYRO - TODO: test ship's head up
+  // GYRO - TODO: test ship's head up - set north in setView
   window.onDeviceOrientation.listen(_hdg);
 
   // GPS
@@ -834,8 +834,8 @@ void _initMain() {
       }).catchError((e) {print(e);});
     });
   } catch (e,s) {
-    print('ERROR: $e');
-    print('STACK: $s');
+    print('s52ui.dart:ERROR: $e');
+    print('s52ui.dart:STACK: $s');
     window.close();
   }
 }

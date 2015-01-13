@@ -1,7 +1,136 @@
 # ChangeLog.OLD: the old way to note mods
 #                The 'real' ChangeLog is generated with the Perl script cvs2cl.pl
+#                OR git log
 #
 
+
+2014DEV26
+    -mob enum S57_Obj_t add prefix S57_
+    -add S52_obj lookup indexed with S5_geo.ID
+    -mod rename S52_GL_del to S52_GL_delDL
+    -del _objToDelList as Mariner obj are del imediatly
+    -mod renderBin[][N_OBJ_T] to [52_N_OBJ]
+    -mod refactor _delObj()
+    -mod layer type max to S52_N_OBJ
+    -mod refactor S52_loadPLib()
+    -mod _isObjValide to check S52_PL_isObjValid()
+    
+2014DEV20
+    -add S52_PL_cpyAux() to copy S52_obj Aux Info
+    -mod move supp field in S57_geo to S52_obj Aux Info
+    -mod move get/set supp from S57data to S52PL
+
+2014DEC19
+    -mod optimisation, cull obj at drawLast()
+    -mod setViewPort in test/s52glx.c
+    -del pen_w in _S52_vec / _S52_cmdDef
+    -del S52_PL_getVOwidth() / S52_PL_setLCdata()
+
+2014DEC18
+    -fix unlock mutex in S52_newCLRLIN()
+    -fix VP in GL1 code path
+
+2014DEC17
+    -fix regression, put back g_string_equal() in utils
+    -fix use VP.h for north arrow
+
+2015DEC14
+    -mod refactor _filterVector()
+    -fix _filterVector() for line width change in symb in VBO code path
+
+2014DEC12
+    -mod logic of S52_MAR_VECMRK in CS moved to GL
+    -fix GL logic of VECMRK, VECPER
+
+2014DEC10
+    -mob resolve mariner SMB CS at creation time (new) rather than in _app()
+
+2014DEC09
+    -mod move libS52wiki.html to doc/ and remove doc/wiki
+
+2014DEC08
+    -mod clean up #include / deps
+    -add doc/graphic/libS52_files_deps-1.152-2014DEC08.dia / .svg
+
+2014DEC07
+    -mod rename S52_getMarObjH to S52_getMarObj
+    -add doc/graphic/Call_FlowChart-1.152-2014DEC07.dia / .svg
+    -mod rename S52_setEGLcb to S52_setEGLCallBack
+    -mod rename EGL_cb to S52_EGL_cb
+
+2014DEC04
+    -mod initialize text group to TRUE (ON)
+
+2014DEC03
+    -mod refactor _vp[] to struct x,y,w,h
+
+2014DEC02
+    -add code / doc in S52.h  to validate calls order
+    -add S52_GL_INIT to GL_cycle
+    -add code to guard using GL Projection Matrix before intialising it
+
+2014DEC01
+    -mod refactor and add guard from calling PROJ4 before initialising it
+
+2014NOV29
+    -del unneeded S52.c:_win2prj()
+    -mod move S52_USE_PROJ to S57data.c PROJ4 stuff
+
+2014NOV28
+    -mod prevent using S52_xy2LL() / S52_LL2xy() before init Projection View
+    -add code in test/s52egl.c to test LEGLIN & guard zone
+
+2014NOV27
+    -mod deprecate S52_toggleObjClass/ON/OFF
+
+2014NOV23
+    -start handling alarm / indication for GuardZone (LEGLIN)
+    -del unused S52_string_equal()
+
+2014NOV10
+    -fix _tmp.tif path in GL_dumpPixles()
+    -mod remove useles mutex unlock in newLEGLIN()
+
+2014NOV09
+    -fix afterglow VESSEL_DELAY time out
+
+2014NOV05
+    -fix mariner obj extent for culling
+    -mod rename S52_DListData to S52_DList
+    -fix ftgl for dotpitch
+
+2014OCT27
+    -fix typo in suppression, Supp, ...
+    -mod skip culling mariners' separetly in _cull()
+    -mod rename S52_GL_isOFFscreen() to S52_GL_isOFFview()
+    -mod rename S52_PL_getToggleState() to S52_PL_getObjToggleState()
+    -fix g_assert(0) to return something in case of G_DISABLE_ASSERT
+
+2014OCT25
+    -add S52_USE_LOGFILE to split LOG and LOG_to_FILE code path
+
+2014OCT17
+    -mod S52_MAR_DISP_CRSR_POS --> S52_MAR_DISP_CRSR_PICK
+    -add optimisation (failed) using tess tolerance (not implemented in libtess) for LOD
+
+2014OCT06
+    -mod S52_error_cb to S52_log_cb
+    -mod setViewPort at init()
+    -mod move _version to utils.c
+
+2014OCT02
+    -fix update _crntMat in _glPopMatrix
+
+2014SEP26
+    -mod SPRINTF by SNPRINTF
+    -mod internal version 1.x
+
+2014SEP10
+    -mob GDAL env. var move to test/*
+
+2014SEP04
+    -mod move EMPTY_NUMBER_MARKER to S57data.h
+    -fix CS wreck above water
 
 2014AUG21
     -fix s52win32 code path
@@ -94,7 +223,7 @@
     -fix build of s52glx
 
 2014APR19
-    -fix compiler warning (static mutex deprecated) 
+    -fix compiler warning (static mutex deprecated)
     -fix mem corruption in GL mask of pattern
 
 2014APR17
@@ -109,7 +238,7 @@
     -add black background in RADAR mode when and NODATA is off
 
 2014APR11
-    -add lat/lng to radar_cb, 
+    -add lat/lng to radar_cb,
     -mod handle more than one radar
 
 2014APR10
@@ -126,7 +255,7 @@
 
 2014MAR24
     -mod optimze DRAW cycle static text
-    -mod optimise centroid to recompute only those affected when view change 
+    -mod optimise centroid to recompute only those affected when view change
 
 2014MAR22
     -mod test/android/dist/system to test/android/dist/sysroot

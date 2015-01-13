@@ -52,6 +52,7 @@ static int    _loadAtt(S57_geo *geoData, GvShape *shape)
         if (NULL == propValue) {
             PRINTF("gv_properties_value = null \n");
             g_assert(0);
+            return FALSE;
         }
 
         S57_setAtt(geoData, propName, propValue);
@@ -121,7 +122,6 @@ S57_geo   *S57_gvLoadObject(const char *objname, void *shape)
         case GVSHAPE_POINT: {
             GvPointShape *point  = (GvPointShape *) shape;
             geocoord *pt = &point->x;
-            //geoData = S57_setPOINT((geocoord*)(point + sizeof(guint) + sizeof(guint) + sizeof(GvProperties)));
             geoData = S57_setPOINT(pt);
             break;
         }

@@ -39,15 +39,28 @@
 
 ///////////////////////////////////////////////////////////////////
 // state
-static int          _doInit             = TRUE;    // initialize (but GL context --need main loop)
-static int          _ctxValidated       = FALSE;   // validate GL context
-static GPtrArray   *_objPick            = NULL;    // list of object picked
-static GString     *_strPick            = NULL;    // hold temps val
-static int          _doHighlight        = FALSE;   // TRUE then _objhighlight point to the object to hightlight
-static S52_GL_cycle _crnt_GL_cycle      = S52_GL_NONE; // failsafe - keep cycle in sync between begin / end
-static int          _identity_MODELVIEW = FALSE;   // TRUE then identity matrix for modelview is on GPU (optimisation for AC())
-static int          _identity_MODELVIEW_cnt = 0;   // count saving
-static GArray      *_tmpWorkBuffer      = NULL;    // tmp buffer
+static int          _doInit        = TRUE;    // initialize (but GL context --need main loop)
+static int          _ctxValidated  = FALSE;   // validate GL context
+static GPtrArray   *_objPick       = NULL;    // list of object picked
+static GString     *_strPick       = NULL;    // hold temps val
+static int          _doHighlight   = FALSE;   // TRUE then _objhighlight point to the object to hightlight
+static S52_GL_cycle _crnt_GL_cycle = S52_GL_INIT; // state before first S52_GL_DRAW
+
+//    S52_GL_NONE; // failsafe - keep cycle in sync between begin / end
+
+// FIXME: rename to something like _doInitViewFirstTime
+static int          _symbCreated   = FALSE;   // TRUE if PLib symb created (DList/VBO)
+
+// now used by _renderLC() only
+static GArray      *_tmpWorkBuffer = NULL;    // tmp buffer
+
+
+////////////////////////////////////////////////////////////////////
+// Projection View
+
+// optimisation
+//static int          _identity_MODELVIEW = FALSE;   // TRUE then identity matrix for modelview is on GPU (optimisation for AC())
+//static int          _identity_MODELVIEW_cnt = 0;   // count saving
 
 static double       _north     = 0.0;
 static double       _rangeNM   = 0.0;
@@ -66,23 +79,29 @@ static projUV _gmin = { INFINITY,  INFINITY};
 static projUV _gmax = {-INFINITY, -INFINITY};
 
 // current ViewPort
-//static GLuint _vp[4]; // x,y,width,height
-static guint _vp[4]; // x,y,width,height
+typedef struct vp_t {
+    guint x;
+    guint y;
+    guint w;
+    guint h;
+} vp_t;
+static vp_t _vp;
 
 // GL_PROJECTION matrix
-typedef enum _VP{
+typedef enum _VP {
     VP_PRJ,         // projected coordinate
     VP_WIN,         // window coordinate
     VP_NUM          // number of coord. systems type
-}VP;
+} VP;
 #define Z_CLIP_PLANE 10000   // clipped beyon this plane
+////////////////////////////////////////////////////////////////////
 
 #define S52_MAX_FONT  4
 
 // hold copy of FrameBuffer
 static int            _fb_update      = TRUE;  // TRUE flag that the FB changed
 static unsigned char *_fb_pixels      = NULL;
-static unsigned int   _fb_pixels_size = 0;
+static guint          _fb_pixels_size = 0;
 static guint          _fb_texture_id  = 0;
 
 #define _RGB           3
@@ -91,7 +110,7 @@ static guint          _fb_texture_id  = 0;
 static int            _fb_format      = _RGB;   // alpha blending done in shader
 #else
 static int            _fb_format      = _RGBA;
-//static int            _fb_format      = RGB ;  // NOTE: on TEGRA2 RGB (3) very slow
+//static int            _fb_format      = _RGB ;  // NOTE: on TEGRA2 RGB (3) very slow
 #endif
 
 typedef struct  pt3  { double   x,y,z; } pt3;
@@ -156,10 +175,11 @@ static guint   _nFrag  = 0;     // number of pixel fragment (color switch)
 static int     _drgare = 0;     // DRGARE
 static int     _depare = 0;     // DEPARE
 static int     _nAC    = 0;     // total AC (Area Color)
-//static int     _debug = 0;
+
 // debug
-//static int _DEBUG = FALSE;
-static guint _S57ID = 0;
+//static int   _debug  = 0;
+//static int   _DEBUG  = FALSE;
+//static guint _S57ID  = 0;
 
 
 // tesselated area stat
@@ -172,18 +192,17 @@ static guint   _npoly     = 0;     // total polys
 // GL utility
 #include "_GLU.i"
 
-// display list / VBO
-static   int  _symbCreated = FALSE;  // TRUE if PLib symb created (DList/VBO)
-
+#ifdef S52_USE_PROJ
+#include <proj_api.h>   // projUV, projXY, projPJ
+#else
 // same thing as in proj_api.h
-#if !defined(S52_USE_PROJ)
 typedef struct { double u, v; } projUV;
 #define projXY projUV
 #define RAD_TO_DEG    57.29577951308232
 #define DEG_TO_RAD     0.0174532925199432958
 #endif
 
-#define ATAN2TODEG(xyz)   (90.0 - atan2(xyz[4]-xyz[1], xyz[3]-xyz[0]) * RAD_TO_DEG)
+#define ATAN2TODEG(xyz)   (90.0 - (atan2(xyz[4]-xyz[1], xyz[3]-xyz[0]) * RAD_TO_DEG))
 
 #define PICA   0.351
 
@@ -216,6 +235,8 @@ static GLuint   _vboIDaftglwVertID = 0;
 static GLuint   _vboIDaftglwColrID = 0;
 #endif
 
+// experimental
+static vertex_t _hazardZone[5*3];
 
 static
 inline void      _checkError(const char *msg)
@@ -253,6 +274,7 @@ GL_OUT_OF_MEMORY
                     recorded.
 */
 
+    //* Note: glGetError() stall the pipeline - how bad it is ?
     GLint err = GL_NO_ERROR; // == 0x0
     for (err = glGetError(); GL_NO_ERROR != err; err = glGetError()) {
         const char *name = NULL;
@@ -277,6 +299,7 @@ GL_OUT_OF_MEMORY
 #endif
 
     }
+    //*/
 #endif
 }
 
@@ -360,7 +383,8 @@ static int       _getCentroidOpen (guint npt, pt3 *v)
 
         //PRINTF("XY(%s): %f, %f, %i \n", (atmp>=0.0) ? "CW " : "CCW", p.x, p.y, npt);
 
-        if (TRUE == S57_isPtInside(npt, (double*)v, pt.x, pt.y, FALSE)) {
+        //if (TRUE == S57_isPtInside(npt, (double*)v, pt.x, pt.y, FALSE)) {
+        if (TRUE == S57_isPtInside(npt, (double*)v, FALSE, pt.x, pt.y)) {
             g_array_append_val(_centroids, pt);
 
             return TRUE;
@@ -407,6 +431,7 @@ static int       _getCentroidClose(guint npt, double *ppt)
     if ((p[0] != p[(npt-1) * 3]) || (p[1] != p[((npt-1) * 3)+1])) {
         PRINTF("WARNING: poly end points doesn't match\n");
         g_assert(0);
+        return FALSE;
     }
 
     // compute area
@@ -427,7 +452,7 @@ static int       _getCentroidClose(guint npt, double *ppt)
 
         //PRINTF("XY(%s): %f, %f, %i \n", (atmp>=0.0) ? "CCW " : "CW", pt->x, pt->y, npt);
 
-        if (TRUE == S57_isPtInside(npt, ppt, pt.x, pt.y, TRUE)) {
+        if (TRUE == S57_isPtInside(npt, ppt, TRUE, pt.x, pt.y)) {
             g_array_append_val(_centroids, pt);
             //PRINTF("point is inside polygone\n");
 
@@ -458,12 +483,12 @@ static double    _computeSCAMIN(void)
 static void      _glMatrixMode(GLenum  mode)
 {
 #ifdef S52_USE_GL2
-    _mode = mode;
+    //_mode = mode;
     switch(mode) {
     	case GL_MODELVIEW:  _crntMat = _mvm[_mvmTop]; break;
     	case GL_PROJECTION: _crntMat = _pjm[_pjmTop]; break;
         default:
-            PRINTF("_glMatrixMode()\n");
+            PRINTF("ERROR: invalid mode (%i)\n", mode);
             g_assert(0);
     }
 #else
@@ -473,16 +498,17 @@ static void      _glMatrixMode(GLenum  mode)
     return;
 }
 
-static void      _glPushMatrix(void)
+static void      _glPushMatrix(int mode)
 {
 #ifdef S52_USE_GL2
     GLfloat *prevMat = NULL;
 
-    switch(_mode) {
+    //switch(_mode) {
+    switch(mode) {
     	case GL_MODELVIEW:  _mvmTop += 1; break;
     	case GL_PROJECTION: _pjmTop += 1; break;
         default:
-            PRINTF("_glPushMatrix()\n");
+            PRINTF("ERROR: invalid mode (%i)\n", mode);
             g_assert(0);
     }
 
@@ -491,27 +517,29 @@ static void      _glPushMatrix(void)
         g_assert(0);
     }
 
-    prevMat  = (GL_MODELVIEW == _mode) ? _mvm[_mvmTop-1] : _pjm[_pjmTop-1];
-    _crntMat = (GL_MODELVIEW == _mode) ? _mvm[_mvmTop  ] : _pjm[_pjmTop  ];
+    prevMat  = (GL_MODELVIEW == mode) ? _mvm[_mvmTop-1] : _pjm[_pjmTop-1];
+    _crntMat = (GL_MODELVIEW == mode) ? _mvm[_mvmTop  ] : _pjm[_pjmTop  ];
 
     // Note: no mem obverlap
-    memcpy(_crntMat, prevMat, sizeof(float) * 16);
+    memcpy(_crntMat, prevMat, sizeof(GLfloat) * 16);
 
 #else
-   glPushMatrix();
+    (void)mode;
+    glPushMatrix();
 #endif
 
     return;
 }
 
-static void      _glPopMatrix(void)
+static void      _glPopMatrix(int mode)
 {
 #ifdef S52_USE_GL2
-    switch(_mode) {
+    //switch(_mode) {
+    switch(mode) {
     	case GL_MODELVIEW:  _mvmTop -= 1; break;
     	case GL_PROJECTION: _pjmTop -= 1; break;
         default:
-            PRINTF("_glPopMatrix()\n");
+            PRINTF("ERROR: invalid mode (%i)\n", mode);
             g_assert(0);
     }
 
@@ -520,26 +548,34 @@ static void      _glPopMatrix(void)
         g_assert(0);
     }
 
+    // update _crntMat
+    _crntMat = (GL_MODELVIEW == mode) ? _mvm[_mvmTop] : _pjm[_pjmTop];
+
     // optimisation
-    if (GL_MODELVIEW == _mode)
-        _identity_MODELVIEW = FALSE;
+    //if (GL_MODELVIEW == _mode)
+    //if (GL_MODELVIEW == mode)
+    //    _identity_MODELVIEW = FALSE;
 
 #else
-   glPopMatrix();
+    (void)mode;
+    glPopMatrix();
 #endif
 
     return;
 }
 
-static void      _glLoadIdentity(void)
+static void      _glLoadIdentity(int mode)
 {
+    (void)mode;
+
 #ifdef S52_USE_GL2
     memset(_crntMat, 0, sizeof(GLfloat) * 16);
     _crntMat[0] = _crntMat[5] = _crntMat[10] = _crntMat[15] = 1.0;
 
     // optimisation - reset flag
-    if (GL_MODELVIEW == _mode)
-        _identity_MODELVIEW = TRUE;
+    //if (GL_MODELVIEW == _mode)
+    //if (GL_MODELVIEW == mode)
+    //    _identity_MODELVIEW = TRUE;
 
 #else
     glLoadIdentity();
@@ -588,10 +624,17 @@ static void      _glOrtho(double left, double right, double bottom, double top, 
 static void      _glUniformMatrix4fv_uModelview(void)
 // optimisation - reset flag
 {
+    _glMatrixMode  (GL_MODELVIEW);
+    _glLoadIdentity(GL_MODELVIEW);
+
 #ifdef S52_USE_GL2
+    glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
+
+
+    /*
     if (FALSE == _identity_MODELVIEW) {
         _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        _glLoadIdentity(GL_MODELVIEW);
 
         glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
 
@@ -599,9 +642,7 @@ static void      _glUniformMatrix4fv_uModelview(void)
     } else {
         _identity_MODELVIEW_cnt++;
     }
-#else
-    glMatrixMode(GL_MODELVIEW);
-    glLoadIdentity();
+    */
 #endif
 
     return;
@@ -618,7 +659,7 @@ static GLint     _pushScaletoPixel(int scaleSym)
     }
 
     _glMatrixMode(GL_MODELVIEW);
-    _glPushMatrix();
+    _glPushMatrix(GL_MODELVIEW);
     _glScaled(scalex, scaley, 1.0);
 
     return TRUE;
@@ -627,15 +668,34 @@ static GLint     _pushScaletoPixel(int scaleSym)
 static GLint     _popScaletoPixel(void)
 {
     _glMatrixMode(GL_MODELVIEW);
-    _glPopMatrix();
+    _glPopMatrix (GL_MODELVIEW);
 
-    // ModelView Matrix will be send to GPU before next glDraw
+    // ModelView Matrix will be send to GPU before next glDraw()
     //glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
 
     return TRUE;
 }
 
+#if 0
+static GLint     _glMatrixDump(int mode)
+// debug
+{
+#ifdef S52_USE_GL2
+    float *m = (GL_MODELVIEW == mode) ? _mvm[_mvmTop] : _pjm[_pjmTop];
+#else
+    double m[16];
+    glGetDoublev(mode, m);
+#endif
 
+    PRINTF("%f\t %f\t %f\t %f \n",m[ 0], m[ 1], m[ 2], m[ 3]);
+    PRINTF("%f\t %f\t %f\t %f \n",m[ 4], m[ 5], m[ 6], m[ 7]);
+    PRINTF("%f\t %f\t %f\t %f \n",m[ 8], m[ 9], m[10], m[11]);
+    PRINTF("%f\t %f\t %f\t %f \n",m[12], m[13], m[14], m[15]);
+    PRINTF("-------------------\n");
+
+    return TRUE;
+}
+#endif
 
 static GLint     _glMatrixSet(VP vpcoord)
 // push & reset matrix GL_PROJECTION & GL_MODELVIEW
@@ -661,12 +721,14 @@ static GLint     _glMatrixSet(VP vpcoord)
             left   = _pmin.u,      right = _pmax.u,
             bottom = _pmin.v,      top   = _pmax.v,
             znear  = Z_CLIP_PLANE, zfar  = -Z_CLIP_PLANE;
+            //PRINTF("DEBUG: set VP_PRJ\n");
             break;
 
         case VP_WIN:
-            left   = _vp[0],       right = _vp[0] + _vp[2],
-            bottom = _vp[1],       top   = _vp[1] + _vp[3];
+            left   = _vp.x,       right = _vp.x + _vp.w,
+            bottom = _vp.y,       top   = _vp.y + _vp.h;
             znear  = Z_CLIP_PLANE, zfar  = -Z_CLIP_PLANE;
+            //PRINTF("DEBUG: set VP_WIN\n");
             break;
         default:
             PRINTF("ERROR: unknown viewport coodinate\n");
@@ -675,24 +737,26 @@ static GLint     _glMatrixSet(VP vpcoord)
     }
 
     if (0.0==left && 0.0==right && 0.0==bottom && 0.0==top) {
-        PRINTF("ERROR: Viewport not set (%f,%f,%f,%f)\n",
+        PRINTF("WARNING: Viewport not set (%f,%f,%f,%f)\n",
                left, right, bottom, top);
         g_assert(0);
+        return FALSE;
     }
 
+    _glMatrixMode  (GL_PROJECTION);
+    _glPushMatrix  (GL_PROJECTION);
+    _glLoadIdentity(GL_PROJECTION);
 
-    _glMatrixMode(GL_PROJECTION);
-    _glPushMatrix();
-    _glLoadIdentity();
     _glOrtho(left, right, bottom, top, znear, zfar);
 
     _glTranslated(  (left+right)/2.0,  (bottom+top)/2.0, 0.0);
     _glRotated   (_north, 0.0, 0.0, 1.0);
     _glTranslated( -(left+right)/2.0, -(bottom+top)/2.0, 0.0);
 
-    _glMatrixMode(GL_MODELVIEW);
-    _glPushMatrix();
-    _glLoadIdentity();
+
+    _glMatrixMode  (GL_MODELVIEW);
+    _glPushMatrix  (GL_MODELVIEW);
+    _glLoadIdentity(GL_MODELVIEW);
 
 #ifdef S52_USE_GL2
     glUniformMatrix4fv(_uProjection, 1, GL_FALSE, _pjm[_pjmTop]);
@@ -709,10 +773,10 @@ static GLint     _glMatrixDel(VP vpcoord)
     (void) vpcoord;
 
     _glMatrixMode(GL_PROJECTION);
-    _glPopMatrix();
+    _glPopMatrix (GL_PROJECTION);
 
     _glMatrixMode(GL_MODELVIEW);
-    _glPopMatrix();
+    _glPopMatrix (GL_MODELVIEW);
 
 #ifdef S52_USE_GL2
     glUniformMatrix4fv(_uProjection, 1, GL_FALSE, _pjm[_pjmTop]);
@@ -721,28 +785,6 @@ static GLint     _glMatrixDel(VP vpcoord)
 
     return TRUE;
 }
-
-#if 0
-static GLint     _glMatrixDump(GLenum matrix)
-// debug
-{
-    double m1[16];
-    double m2[16];
-
-    glGetDoublev(matrix, m1);
-
-    memcpy(m2 ,m1, sizeof(m1));
-
-    if (0 == memcmp(m2, m1, sizeof(m1))) {
-        PRINTF("%f\t %f\t %f\t %f \n",m2[0], m2[1], m2[2], m2[3]);
-        PRINTF("%f\t %f\t %f\t %f \n",m2[4], m2[5], m2[6], m2[7]);
-        PRINTF("%f\t %f\t %f\t %f \n",m2[8], m2[9], m2[10],m2[11]);
-        PRINTF("%f\t %f\t %f\t %f \n",m2[12],m2[13],m2[14],m2[15]);
-        PRINTF("-------------------\n");
-    }
-    return 1;
-}
-#endif
 
 
 //-----------------------------------
@@ -754,23 +796,32 @@ static GLint     _glMatrixDump(GLenum matrix)
 static int       _win2prj(double *x, double *y)
 // convert coordinate: window --> projected
 {
+    GLint vp[4] = {_vp.x,_vp.y,_vp.w,_vp.h};
 #ifdef S52_USE_GL2
     float u       = *x;
     float v       = *y;
     float dummy_z = 0.0;
-    if (GL_FALSE == _gluUnProject(u, v, dummy_z, _mvm[_mvmTop], _pjm[_pjmTop], (GLint*)_vp, &u, &v, &dummy_z)) {
-        PRINTF("WARNING: UnProjection faild\n");
 
+    /* debug
+    if (TRUE == isnan(_pjm[_pjmTop][0])) {
+        PRINTF("WARNING: broken Projection Matrix\n");
         g_assert(0);
-
         return FALSE;
     }
+    */
+
+    if (GL_FALSE == _gluUnProject(u, v, dummy_z, _mvm[_mvmTop], _pjm[_pjmTop], vp, &u, &v, &dummy_z)) {
+        PRINTF("WARNING: UnProjection faild\n");
+        g_assert(0);
+        return FALSE;
+    }
+
     *x = u;
     *y = v;
 
 #else
     GLdouble dummy_z = 0.0;
-    if (GL_FALSE == gluUnProject(*x, *y, dummy_z, _mvm, _pjm, (GLint*)_vp, x, y, &dummy_z)) {
+    if (GL_FALSE == gluUnProject(*x, *y, dummy_z, _mvm, _pjm, vp, x, y, &dummy_z)) {
         PRINTF("WARNING: UnProjection faild\n");
         g_assert(0);
         return FALSE;
@@ -780,15 +831,12 @@ static int       _win2prj(double *x, double *y)
     return TRUE;
 }
 
-
 static projXY    _prj2win(projXY p)
 // convert coordinate: projected --> window (pixel)
 {
-    // debug
-    //PRINTF("_VP[]: %i,%i,%i,%i\n", _vp[0], _vp[1], _vp[2], _vp[3]);
-
+    GLint vp[4] = {_vp.x,_vp.y,_vp.w,_vp.h};
 #ifdef S52_USE_GL2
-    // FIXME: find a better way -
+    // FIXME: find a better way to catch non initialyse matrix
     if (0 == _pjm[_pjmTop]) {
         g_assert(0);
         return p;
@@ -799,29 +847,86 @@ static projXY    _prj2win(projXY p)
 
     // make sure that _gluProject() has the right coordinate
     // but if call from 52_GL_prj2win() then matrix allready set so this is redundant
-    _glMatrixMode(GL_MODELVIEW);
-    _glLoadIdentity();
+    //_glMatrixMode  (GL_MODELVIEW);
+    _glLoadIdentity(GL_MODELVIEW);
 
-    if (GL_FALSE == _gluProject(u, v, dummy_z, _mvm[_mvmTop], _pjm[_pjmTop], (GLint*)_vp, &u, &v, &dummy_z)) {
+    if (GL_FALSE == _gluProject(u, v, dummy_z, _mvm[_mvmTop], _pjm[_pjmTop], vp, &u, &v, &dummy_z)) {
         PRINTF("ERROR\n");
         g_assert(0);
+        return p;
     }
     p.u = u;
     p.v = v;
 #else
     GLdouble dummy_z = 0.0;
-    if (GL_FALSE == gluProject(p.u, p.v, dummy_z, _mvm, _pjm, (GLint*)_vp, &p.u, &p.v, &dummy_z)) {
+    if (GL_FALSE == gluProject(p.u, p.v, dummy_z, _mvm, _pjm, vp, &p.u, &p.v, &dummy_z)) {
         PRINTF("ERROR\n");
         g_assert(0);
+        return p;
     }
 #endif
 
     return p;
 }
 
+static int       _doProjection(vp_t vp, double centerLat, double centerLon, double rangeDeg)
+{
+    pt3 NE = {0.0, 0.0, 0.0};  // Nort/East
+    pt3 SW = {0.0, 0.0, 0.0};  // South/West
+
+    NE.y = centerLat + rangeDeg;
+    SW.y = centerLat - rangeDeg;
+    NE.x = SW.x = centerLon;
+
+    if (FALSE == S57_geo2prj3dv(1, (double*)&NE))
+        return FALSE;
+    if (FALSE == S57_geo2prj3dv(1, (double*)&SW))
+        return FALSE;
+
+    {
+        // screen ratio
+        double r = (double)vp.h / (double)vp.w;   // > 1 'h' dominant, < 1 'w' dominant
+        //PRINTF("Viewport pixels (width x height): %i %i (r=%f)\n", w, h, r);
+        double dy = NE.y - SW.y;
+        // assume h dominant (latitude), so range
+        // fit on a landscape screen in latitude
+        // FIXME: in portrait screen logitude is dominant
+        // check if the ratio is the same on Xoom.
+        double dx = dy / r;
+
+        NE.x += (dx / 2.0);
+        SW.x -= (dx / 2.0);
+    }
+
+    _pmin.u = SW.x;  // left
+    _pmin.v = SW.y;  // bottom
+    _pmax.u = NE.x;  // right
+    _pmax.v = NE.y;  // top
+    //PRINTF("PROJ MIN: %f %f  MAX: %f %f\n", _pmin.u, _pmin.v, _pmax.u, _pmax.v);
+
+    // use to cull object base on there extent and view in deg
+    _gmin.u = SW.x;
+    _gmin.v = SW.y;
+    _gmin   = S57_prj2geo(_gmin);
+
+    _gmax.u = NE.x;
+    _gmax.v = NE.y;
+    _gmax   = S57_prj2geo(_gmax);
+
+    // MPP - Meter Per Pixel
+    _scalex = (_pmax.u - _pmin.u) / (double)vp.w;
+    _scaley = (_pmax.v - _pmin.v) / (double)vp.h;
+
+    return TRUE;
+}
+
 int        S52_GL_win2prj(double *x, double *y)
 // convert coordinate: window --> projected
 {
+    // if symb OK imply that projection is OK
+    if (FALSE == _symbCreated)
+        return FALSE;
+
     _glMatrixSet(VP_PRJ);
 
     int ret = _win2prj(x, y);
@@ -831,9 +936,14 @@ int        S52_GL_win2prj(double *x, double *y)
     return ret;
 }
 
+
 int        S52_GL_prj2win(double *x, double *y)
-// convert coordinate: projected --> windows
+// convert coordinate: projected --> window
 {
+    // if symbole OK imply that projection is OK
+    if (FALSE == _symbCreated)
+        return FALSE;
+
     _glMatrixSet(VP_PRJ);
 
     {
@@ -902,9 +1012,11 @@ static GLvoid    _DrawArrays_LINE_STRIP(guint npt, vertex_t *ppt)
     }
     */
 
-
-    if (npt < 2)
+    if (npt < 2) {
+        PRINTF("FIXME: npt < 2 (%i)\n", npt);
+        g_assert(0);
         return;
+    }
 
 #ifdef S52_USE_GL2
     glEnableVertexAttribArray(_aPosition);
@@ -912,11 +1024,9 @@ static GLvoid    _DrawArrays_LINE_STRIP(guint npt, vertex_t *ppt)
     glDrawArrays(GL_LINE_STRIP, 0, npt);
     glDisableVertexAttribArray(_aPosition);
 #else
-    //glEnableClientState(GL_VERTEX_ARRAY);
     glVertexPointer(3, GL_DBL_FLT, 0, ppt);
     glDrawArrays(GL_LINE_STRIP, 0, npt);
 #endif
-
 
     _checkError("_DrawArrays_LINE_STRIP() .. end");
 
@@ -924,16 +1034,20 @@ static GLvoid    _DrawArrays_LINE_STRIP(guint npt, vertex_t *ppt)
 }
 
 static GLvoid    _DrawArrays_LINES(guint npt, vertex_t *ppt)
-// this is used when VRM line style is aternate line style
+// this is used when VRM line style is alternate line style
 // ie _normallinestyle == 'N'
 {
-    if (0 != (npt % 2)) {
-        PRINTF("FIXME: found LINES not modulo 2\n");
-        g_assert(0);
+    if (npt < 2) {
+        PRINTF("FIXME: found wierd LINES (%i)\n", npt);
+        return;
     }
 
-    if (npt < 2)
+    if (0 != (npt % 2)) {
+        PRINTF("FIXME: found LINES not modulo 2 (%i)\n", npt);
+        g_assert(0);
         return;
+    }
+
 
 #ifdef S52_USE_GL2
     glEnableVertexAttribArray(_aPosition);
@@ -941,7 +1055,6 @@ static GLvoid    _DrawArrays_LINES(guint npt, vertex_t *ppt)
     glDrawArrays(GL_LINES, 0, npt);
     glDisableVertexAttribArray(_aPosition);
 #else
-    //glEnableClientState(GL_VERTEX_ARRAY);
     glVertexPointer(3, GL_DBL_FLT, 0, ppt);
     glDrawArrays(GL_LINES, 0, npt);
 #endif
@@ -952,12 +1065,13 @@ static GLvoid    _DrawArrays_LINES(guint npt, vertex_t *ppt)
 }
 
 #ifdef S52_USE_OPENGL_VBO
-static int       _VBODrawArrays(S57_prim *prim)
+static int       _VBODrawArrays_AREA(S57_prim *prim)
+// only called by _fillArea() --> _VBODraw_AREA()
 {
     guint     primNbr = 0;
-    vertex_t *vert    = NULL;
-    guint     vertNbr = 0;
-    guint     vboID   = 0;
+    vertex_t *vert    = NULL;   // dummy
+    guint     vertNbr = 0;      // dummy
+    guint     vboID   = 0;      // dummy
 
     if (FALSE == S57_getPrimData(prim, &primNbr, &vert, &vertNbr, &vboID))
         return FALSE;
@@ -992,25 +1106,16 @@ static int       _VBODrawArrays(S57_prim *prim)
         }
         */
 
-        // debug - 10 call of count = 66 --> AC(),AP()
-        //glDrawArrays(mode = GL_TRIANGLES, first = 0, count = 66)
-        //if (GL_TRIANGLES==mode && 66==count)
-        //    PRINTF("SKIP %i\n", _S57ID);
-        //else
+        if (_TRANSLATE == mode) {
+            PRINTF("FIXME: _TRANSLATE\n");
+            g_assert(0);
+        } else {
             glDrawArrays(mode, first, count);
-
-
-        //
-        //if (_QUADRIC_TRANSLATE == mode) {
-        //    g_assert(1 == count);
-        //    _glTranslated(vert[first+0], vert[first+1], vert[first+2]);
-        //} else {
-        //    glDrawArrays(mode, first, count);
-        //}
+        }
     }
 
 
-    _checkError("_VBODrawArrays()");
+    _checkError("_VBODrawArrays_AREA()");
 
     return TRUE;
 }
@@ -1051,13 +1156,14 @@ static int       _VBOCreate(S57_prim *prim)
     } else {
         PRINTF("ERROR: VBO allready set!\n");
         g_assert(0);
+        return FALSE;
     }
 
     return vboID;
 }
 
-static int       _VBODraw(S57_prim *prim)
-// run a VBO
+static int       _VBODraw_AREA(S57_prim *prim)
+// run a VBO - only called by _fillArea()
 {
     guint     primNbr = 0;
     vertex_t *vert    = NULL;
@@ -1078,18 +1184,18 @@ static int       _VBODraw(S57_prim *prim)
 #ifdef S52_USE_GL2
     glEnableVertexAttribArray(_aPosition);
     glVertexAttribPointer(_aPosition, 3, GL_FLOAT, GL_FALSE, 0, 0);
-    _VBODrawArrays(prim);
+    _VBODrawArrays_AREA(prim);
     glDisableVertexAttribArray(_aPosition);
 #else
     // set VertPtr to VBO
-    glVertexPointer(3, GL_DOUBLE, 0, 0);
-    _VBODrawArrays(prim);
+    glVertexPointer(3, GL_DBL_FLT, 0, 0);
+    _VBODrawArrays_AREA(prim);
 #endif
 
     // bind with 0 - switch back to normal pointer operation
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    _checkError("_VBODraw() -fini-");
+    _checkError("_VBODraw_AREA() -fini-");
 
     return TRUE;
 }
@@ -1100,8 +1206,8 @@ static int       _DrawArrays(S57_prim *prim)
 {
     guint     primNbr = 0;
     vertex_t *vert    = NULL;
-    guint     vertNbr = 0;
-    guint     vboID   = 0;
+    guint     vertNbr = 0;      // dummy
+    guint     vboID   = 0;      // dummy
 
     if (FALSE == S57_getPrimData(prim, &primNbr, &vert, &vertNbr, &vboID))
         return FALSE;
@@ -1132,6 +1238,7 @@ static guint     _createDList(S57_prim *prim)
     if (0 == DList) {
         PRINTF("ERROR: glGenLists() failed\n");
         g_assert(0);
+        return FALSE;
     }
 
     glNewList(DList, GL_COMPILE);
@@ -1241,16 +1348,12 @@ static double    _getGridRef(S52_obj *obj, double *LLx, double *LLy, double *URx
     return stagOffsetPix;
 }
 
-static int       _fillarea(S57_geo *geoData)
+static int       _fillArea(S57_geo *geoData)
+//static int       _fillArea(S57_geo *geoData, char LOD)
 {
-    _S57ID = S57_getGeoID(geoData);
-    _npoly++;
-
-    S57_prim *prim = S57_getPrimGeo(geoData);
-    if (NULL == prim) {
-        prim = _tessd(_tobj, geoData);
-    }
-
+    // debug
+    //_S57ID = S57_getGeoID(geoData);
+    //_npoly++;
     // debug - test optimization
     //if (0 == g_strcmp0("DEPARE", S57_getName(geoData))) {
     //    ++_depare;
@@ -1258,9 +1361,35 @@ static int       _fillarea(S57_geo *geoData)
     //}
     //++_nAC;
 
+
+    S57_prim *prim = S57_getPrimGeo(geoData);
+    if (NULL == prim) {
+
+        /*
+        switch (LOD) {
+        //case -1: break;
+        case '0': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.1     ); break;  // world
+        case '1': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.01    ); break;
+        //case '2': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.001   ); break;
+        case '2': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.1   ); break;
+        case '3': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.0001  ); break;
+        case '4': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.00001 ); break;
+        case '5': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.000001); break;
+        case '6': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.000001); break;
+        default:
+            gluTessProperty(_tcen, GLU_TESS_TOLERANCE, 0.000001);
+        }
+        //*/
+
+        prim = _tessd(_tobj, geoData);
+
+        // reset normal tolerance
+        //gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.000001);
+    }
+
 #ifdef S52_USE_OPENGL_VBO
-    if (FALSE == _VBODraw(prim)) {
-        PRINTF("DEBUG: _VBODraw() failed [%s]\n", S57_getName(geoData));
+    if (FALSE == _VBODraw_AREA(prim)) {
+        PRINTF("DEBUG: _VBODraw_AREA() failed [%s]\n", S57_getName(geoData));
     }
 #else
     _callDList(prim);
@@ -1275,10 +1404,14 @@ static int       _fillarea(S57_geo *geoData)
 // SYMBOLOGY INSTRUCTION RENDERER SECTION
 //
 //---------------------------------------
+
+// FIXME: ship head up for safety perimeter
+
 typedef struct col {
     GLubyte r;
     GLubyte g;
     GLubyte b;
+    // FIXME: use _fb_format (rgb/rgba) and EGL rgb/rgba
     GLubyte a;
 } col;
 
@@ -1288,6 +1421,8 @@ typedef union cIdx {
     guint idx;
 } cIdx;
 static cIdx _cIdx;
+// FIXME: try 1 x 1
+//static cIdx _pixelsRead[1 * 1];  // buffer to collect pixels when in S52_GL_PICK mode
 static cIdx _pixelsRead[8 * 8];  // buffer to collect pixels when in S52_GL_PICK mode
 
 #if 0
@@ -1295,7 +1430,7 @@ static int       _setBlend(int blend)
 // TRUE turn on blending if AA
 {
     //static int blendstate = FALSE;
-    if (TRUE == S52_MP_get(S52_MAR_ANTIALIAS)) {
+    if (TRUE == (int) S52_MP_get(S52_MAR_ANTIALIAS)) {
         if (TRUE == blend) {
             glEnable(GL_BLEND);
 
@@ -1322,14 +1457,13 @@ static int       _setBlend(int blend)
 static GLubyte   _glColor4ub(S52_Color *c)
 // return transparancy
 {
-
-#ifdef S52_DEBUG
+    /* debug
     if (NULL == c) {
-        PRINTF("ERROR: no color\n");
+        PRINTF("DEBUG: no color NULL\n");
         g_assert(0);
         return 0;
     }
-#endif
+    */
 
     if (S52_GL_PICK == _crnt_GL_cycle) {
         // debug
@@ -1347,7 +1481,7 @@ static GLubyte   _glColor4ub(S52_Color *c)
     if ('0' != c->trans) {
         // FIXME: some symbol allway use blending
         // but now with GLES2 AA its all or nothing
-        if (TRUE == S52_MP_get(S52_MAR_ANTIALIAS))
+        if (TRUE == (int) S52_MP_get(S52_MAR_ANTIALIAS))
             glEnable(GL_BLEND);
 
 #ifdef S52_USE_GL1
@@ -1378,13 +1512,15 @@ static GLubyte   _glColor4ub(S52_Color *c)
     return c->trans;
 }
 
-static int       _glCallList(S52_DListData *DListData)
+static int       _glCallList(S52_DList *DListData)
 // get color of each Display List then run it
 {
     if (NULL == DListData) {
         PRINTF("WARNING: NULL DListData!\n");
         return FALSE;
     }
+
+    _checkError("_glCallList(): -start-");
 
 #ifdef S52_USE_GL2
     glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
@@ -1402,7 +1538,7 @@ static int       _glCallList(S52_DListData *DListData)
 
         GLubyte trans = _glColor4ub(col);
 
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
         GLuint vboId = DListData->vboIds[i];
         glBindBuffer(GL_ARRAY_BUFFER, vboId);         // for vertex coordinates
 
@@ -1410,7 +1546,7 @@ static int       _glCallList(S52_DListData *DListData)
 #ifdef S52_USE_GL2
         glVertexAttribPointer(_aPosition, 3, GL_FLOAT, GL_FALSE, 0, 0);
 #else
-        glVertexPointer(3, GL_DOUBLE, 0, 0);
+        glVertexPointer(3, GL_DBL_FLT, 0, 0);
 #endif
 
         {
@@ -1419,8 +1555,8 @@ static int       _glCallList(S52_DListData *DListData)
             GLint first = 0;
             GLint count = 0;
 
+            // same color but change in MODE
             while (TRUE == S57_getPrimIdx(DListData->prim[i], j, &mode, &first, &count)) {
-                //if (_QUADRIC_TRANSLATE == mode) {
                 if (_TRANSLATE == mode) {
                     GArray *vert = S57_getPrimVertex(DListData->prim[i]);
 
@@ -1451,6 +1587,15 @@ static int       _glCallList(S52_DListData *DListData)
 
                         // normal draw
                         glDrawArrays(mode, first, count);
+
+                        /*
+                        { // debug
+                            char str[80];
+                            SNPRINTF(str, 80, "_glCallList():glDrawArrays() mode:%i first:%i count:%i", mode, first, count);
+                            //_checkError("_glCallList(): -glDrawArrays()-");
+                            _checkError(str);
+                        }
+                        */
                     }
                 }
                 ++j;
@@ -1461,7 +1606,7 @@ static int       _glCallList(S52_DListData *DListData)
 
 #else   // S52_USE_OPENGL_VBO
 
-        glVertexPointer(3, GL_DOUBLE, 0, 0);              // last param is offset, not ptr
+        glVertexPointer(3, GL_DBL_FLT, 0, 0);              // last param is offset, not ptr
         if (TRUE == glIsList(lst)) {
             //++_nFrag;
             glCallList(lst);              // NOT in OpenGL ES SC
@@ -1469,6 +1614,7 @@ static int       _glCallList(S52_DListData *DListData)
         } else {
             PRINTF("WARNING: glIsList() failed\n");
             g_assert(0);
+            return FALSE;
         }
 
 #endif  // S52_USE_OPENGL_VBO
@@ -1478,6 +1624,7 @@ static int       _glCallList(S52_DListData *DListData)
             glDisable(GL_ALPHA_TEST);
 #endif
         }
+
     }
 
 #ifdef S52_USE_GL2
@@ -1524,7 +1671,6 @@ static int       _computeCentroid(S57_geo *geoData)
     //PRINTF("%s EXT %f,%f -- %f,%f\n", S57_getName(geoData), _pmin.u, _pmin.v, _pmax.u, _pmax.v);
 
     double x1,y1, x2,y2;
-    //S57_getExtPRJ(geoData, &x1, &y1, &x2, &y2);
     S57_getExt(geoData, &x1, &y1, &x2, &y2);
     double xyz[6] = {x1, y1, 0.0, x2, y2, 0.0};
     if (FALSE == S57_geo2prj3dv(2, (double*)&xyz))
@@ -1667,10 +1813,9 @@ static int       _getVesselVector(S52_obj *obj, double *course, double *speed)
 
 static int       _renderSY_POINT_T(S52_obj *obj, double x, double y, double rotation)
 {
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
-    _glMatrixMode(GL_MODELVIEW);
-    _glLoadIdentity();
+    _glLoadIdentity(GL_MODELVIEW);
 
     _glTranslated(x, y, 0.0);
     _glScaled(1.0, -1.0, 1.0);
@@ -1699,7 +1844,7 @@ static int       _renderSY_silhoutte(S52_obj *obj)
     if (FALSE==S57_getGeoData(geo, 0, &npt, &ppt))
         return FALSE;
 
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
     // compute ship symbol size on screen
     // get offset
@@ -1726,14 +1871,14 @@ static int       _renderSY_silhoutte(S52_obj *obj)
     double shpLenPixel = shplen / _scaley;
 
     // > 10 mm draw to scale
-    if (((shpLenPixel*_dotpitch_mm_y) >= SHIPS_OUTLINE_MM) && (TRUE==S52_MP_get(S52_MAR_SHIPS_OUTLINE))) {
+    if (((shpLenPixel*_dotpitch_mm_y) >= SHIPS_OUTLINE_MM) && (TRUE==(int) S52_MP_get(S52_MAR_SHIPS_OUTLINE))) {
 
         // 3 - compute stretch of symbol (ratio)
         double lenRatio = shpLenPixel / symLenPixel;
         double brdRatio = shpBrdPixel / symBrdPixel;
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        //_glMatrixMode  (GL_MODELVIEW);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glScaled(1.0, -1.0, 1.0);
@@ -1756,6 +1901,7 @@ static int       _renderSY_silhoutte(S52_obj *obj)
 }
 
 static int       _renderSY_CSYMB(S52_obj *obj)
+// FIXME: use _dotpitch_ for XY placement
 {
     S57_geo *geoData = S52_PL_getGeo(obj);
     char    *attname = "$SCODE";
@@ -1766,7 +1912,7 @@ static int       _renderSY_CSYMB(S52_obj *obj)
         return FALSE;
     }
 
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
 
     // scale bar
     if (0==g_strcmp0(attval->str, "SCALEB10") ||
@@ -1792,8 +1938,7 @@ static int       _renderSY_CSYMB(S52_obj *obj)
         double x = 10.0; // 3 mm from left
         double y = 10.0; // bottom justifier
 
-
-        _glMatrixSet(VP_PRJ);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _win2prj(&x, &y);
 
@@ -1821,58 +1966,48 @@ static int       _renderSY_CSYMB(S52_obj *obj)
 
         _popScaletoPixel();
 
-        _glMatrixDel(VP_PRJ);
-
         return TRUE;
     }
 
-
     // north arrow
-    if (0==g_strcmp0(attval->str, "NORTHAR1")) {
-        double x = 30;
-        double y = _vp[3] - 40;
-        double rotation = 0.0;
+    if (0 == g_strcmp0(attval->str, "NORTHAR1")) {
+        double x   = 30;
+        double y   = _vp.h - 40;
+        double rot = 0.0;
 
-        _glMatrixSet(VP_PRJ);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _win2prj(&x, &y);
 
-        _renderSY_POINT_T(obj, x, y, rotation);
-
-        _glMatrixDel(VP_PRJ);
+        _renderSY_POINT_T(obj, x, y, rot);
 
         return TRUE;
     }
 
     // depth unit
-    if (0==g_strcmp0(attval->str, "UNITMTR1")) {
+    if (0 == g_strcmp0(attval->str, "UNITMTR1")) {
         // Note: S52 specs say: left corner, just beside the scalebar [what does that mean in XY]
         double x = 30;
         double y = 20;
 
-        _glMatrixSet(VP_PRJ);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _win2prj(&x, &y);
 
         _renderSY_POINT_T(obj, x, y, _north);
 
-        _glMatrixDel(VP_PRJ);
-
         return TRUE;
     }
 
-    if (TRUE == S52_MP_get(S52_MAR_DISP_CALIB)) {
+    if (TRUE == (int) S52_MP_get(S52_MAR_DISP_CALIB)) {
         // check symbol physical size, should be 5mm by 5mm
-        if (0==g_strcmp0(attval->str, "CHKSYM01")) {
-            // FIXME: use _dotpitch_ ..
-            double x = _vp[0] + 50;
-            double y = _vp[1] + 50;
+        if (0 == g_strcmp0(attval->str, "CHKSYM01")) {
+            double x = _vp.x + 50;
+            double y = _vp.y + 50;
 
-            _glMatrixSet(VP_PRJ);
+            _glLoadIdentity(GL_MODELVIEW);
+
             _win2prj(&x, &y);
-
-            _glMatrixMode(GL_MODELVIEW);
-            _glLoadIdentity();
 
             _glTranslated(x, y, 0.0);
             _glScaled(_scalex / (_dotpitch_mm_x * 100.0),
@@ -1884,24 +2019,21 @@ static int       _renderSY_CSYMB(S52_obj *obj)
 
             _glCallList(DListData);
 
-            _glMatrixDel(VP_PRJ);
-
             return TRUE;
         }
 
         // symbol to be used for checking and adjusting the brightness and contrast controls
-        if (0==g_strcmp0(attval->str, "BLKADJ01")) {
+        if (0 == g_strcmp0(attval->str, "BLKADJ01")) {
             // FIXME: use _dotpitch_ ..
             // top left (witch is under CPU usage on Android)
-            double x = _vp[2] - 50;
-            double y = _vp[3] - 50;
+            double x = _vp.w - 50;
+            double y = _vp.h - 50;
 
-            _glMatrixSet(VP_PRJ);
+            _glLoadIdentity(GL_MODELVIEW);
+
             _win2prj(&x, &y);
 
             _renderSY_POINT_T(obj, x, y, _north);
-
-            _glMatrixDel(VP_PRJ);
 
             return TRUE;
         }
@@ -1954,7 +2086,7 @@ static int       _renderSY_ownshp(S52_obj *obj)
         double shpLenPixel = shplen / _scaley;
 
         // 10 mm drawn circle if silhoutte to small OR no silhouette at all
-        if ( ((shpLenPixel*_dotpitch_mm_y) < SHIPS_OUTLINE_MM) || (FALSE==S52_MP_get(S52_MAR_SHIPS_OUTLINE))) {
+        if ( ((shpLenPixel*_dotpitch_mm_y) < SHIPS_OUTLINE_MM) || (FALSE==(int) S52_MP_get(S52_MAR_SHIPS_OUTLINE))) {
             _renderSY_POINT_T(obj, ppt[0], ppt[1], orient);
         }
 
@@ -1962,16 +2094,17 @@ static int       _renderSY_ownshp(S52_obj *obj)
     }
 
     // draw vector stabilization
+    // FIXME: use S52_MAR_VECSTB to draw VECGND01 -OR- VECWTR01 (not both)
     if (0 == S52_PL_cmpCmdParam(obj, "VECGND01") ||
         0 == S52_PL_cmpCmdParam(obj, "VECWTR01") ) {
-        double vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        // 1 or 2
+        if (0.0 != S52_MP_get(S52_MAR_VECSTB)) {
             // compute symbol offset due to course and seep
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
 
                 double courseRAD = (90.0 - course)*DEG_TO_RAD;
-                double veclenNM  = vecper   * (speed /60.0);
+                double veclenNM  = S52_MP_get(S52_MAR_VECPER) * (speed /60.0);
                 double veclenM   = veclenNM * NM_METER;
                 double veclenMX  = veclenM  * cos(courseRAD);
                 double veclenMY  = veclenM  * sin(courseRAD);
@@ -1984,10 +2117,14 @@ static int       _renderSY_ownshp(S52_obj *obj)
         return TRUE;
     }
 
+    //
+    // FIXME: OSPSIX02, OSPONE02, pivot seem to be on the base of triangle (it should be at the top!)
+    //
+
     // time marks on vector - 6 min
     if (0 == S52_PL_cmpCmdParam(obj, "OSPSIX02")) {
-        double     vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        // 1 or 2
+        if (0.0 != S52_MP_get(S52_MAR_VECMRK)) {
             // compute symbol offset of each 6 min mark
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
@@ -1996,7 +2133,11 @@ static int       _renderSY_ownshp(S52_obj *obj)
                 double veclenM6min  = veclenNM6min * NM_METER;
                 double veclenM6minX = veclenM6min  * cos(orientRAD);
                 double veclenM6minY = veclenM6min  * sin(orientRAD);
-                int    nmrk         = (int) (vecper / 6.0);
+                int    nmrk         = (int) (S52_MP_get(S52_MAR_VECPER) / 6.0);
+
+                // don't draw the last OSPSIX if overright S52_MAR_VECSTB
+                if (0.0!=S52_MP_get(S52_MAR_VECSTB) && 0==(int)S52_MP_get(S52_MAR_VECPER)%6)
+                    --nmrk;
 
                 for (int i=0; i<nmrk; ++i) {
                     double ptx = ppt[0] + veclenM6minX*(i+1);
@@ -2013,8 +2154,7 @@ static int       _renderSY_ownshp(S52_obj *obj)
 
     // time marks on vector - 1 min
     if (0 == S52_PL_cmpCmdParam(obj, "OSPONE02")) {
-        double     vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        if (1.0 == S52_MP_get(S52_MAR_VECMRK)) {
             // compute symbol offset of each 1 min mark
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
@@ -2023,9 +2163,13 @@ static int       _renderSY_ownshp(S52_obj *obj)
                 double veclenM1min  = veclenNM1min * NM_METER;
                 double veclenM1minX = veclenM1min  * cos(orientRAD);
                 double veclenM1minY = veclenM1min  * sin(orientRAD);
-                int    nmrk         = vecper;
+                int    nmrk         = (int)S52_MP_get(S52_MAR_VECPER);
 
                 for (int i=0; i<nmrk; ++i) {
+                    // skip 6 min mark
+                    if (0 == (i+1) % 6)
+                        continue;
+
                     double ptx = ppt[0] + veclenM1minX*(i+1);
                     double pty = ppt[1] + veclenM1minY*(i+1);
 
@@ -2053,9 +2197,6 @@ static int       _renderSY_vessel(S52_obj *obj)
     GString  *vestatstr = S57_getAttVal(geo, "vestat");  // vessel state
     GString  *vecstbstr = S57_getAttVal(geo, "vecstb");  // vector stabilize
     GString  *headngstr = S57_getAttVal(geo, "headng");
-
-    // debug
-    //return TRUE;
 
     if (FALSE==S57_getGeoData(geo, 0, &npt, &ppt))
         return FALSE;
@@ -2100,28 +2241,25 @@ static int       _renderSY_vessel(S52_obj *obj)
 #endif
 
     // draw vector stabilization
-    // FIXME: NO VECT STAB if target sleeping
+    // FIXME: NO VECT STAB if target sleeping - (NULL!=vestatstr && '2'==*vestatstr->str)
     if (0 == S52_PL_cmpCmdParam(obj, "VECGND21") ||
         0 == S52_PL_cmpCmdParam(obj, "VECWTR21") ) {
-        double     vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        // 1 or 2
+        if (NULL!=vecstbstr && ('1'==*vecstbstr->str||'2'==*vecstbstr->str)) {
             // compute symbol offset due to course and speed
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
                 double courseRAD = (90.0 - course)*DEG_TO_RAD;
-                double veclenNM  = vecper   * (speed /60.0);
+                double veclenNM  = S52_MP_get(S52_MAR_VECPER) * (speed /60.0);
                 double veclenM   = veclenNM * NM_METER;
                 double veclenMX  = veclenM  * cos(courseRAD);
                 double veclenMY  = veclenM  * sin(courseRAD);
 
-                if ((0==S52_PL_cmpCmdParam(obj, "VECGND21")) &&
-                    (NULL!=vecstbstr && '1'==*vecstbstr->str)
-                   ) {
+                // FIXME: why make this check again!!
+                if ((0==S52_PL_cmpCmdParam(obj, "VECGND21")) && ('1'==*vecstbstr->str) ) {
                     _renderSY_POINT_T(obj, ppt[0]+veclenMX, ppt[1]+veclenMY, course);
                 } else {
-                    if ((0==S52_PL_cmpCmdParam(obj, "VECWTR21")) &&
-                        (NULL!=vecstbstr && '2'==*vecstbstr->str)
-                       ) {
+                    if ((0==S52_PL_cmpCmdParam(obj, "VECWTR21")) && ('2'==*vecstbstr->str) ) {
                         _renderSY_POINT_T(obj, ppt[0]+veclenMX, ppt[1]+veclenMY, course);
                     }
                 }
@@ -2131,11 +2269,15 @@ static int       _renderSY_vessel(S52_obj *obj)
         return TRUE;
     }
 
+    //
+    // FIXME: AISSIX01, AISONE01, pivot seem to be on the base of triangle (it should be at the top!)
+    //
+
     // time marks on vector - 6 min
     if ((0 == S52_PL_cmpCmdParam(obj, "ARPSIX01")) ||
         (0 == S52_PL_cmpCmdParam(obj, "AISSIX01")) ){
-        double     vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        // 1 or 2
+        if (0.0 != S52_MP_get(S52_MAR_VECMRK)) {
             // compute symbol offset of each 6 min mark
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
@@ -2144,7 +2286,11 @@ static int       _renderSY_vessel(S52_obj *obj)
                 double veclenM6min  = veclenNM6min * NM_METER;
                 double veclenM6minX = veclenM6min  * cos(orientRAD);
                 double veclenM6minY = veclenM6min  * sin(orientRAD);
-                int    nmrk         = vecper / 6.0;
+                int    nmrk         = (int)(S52_MP_get(S52_MAR_VECPER) / 6.0);
+
+                // don't draw the last AISSIX if overright S52_MAR_VECSTB
+                if (0.0!=S52_MP_get(S52_MAR_VECSTB) && 0==(int)S52_MP_get(S52_MAR_VECPER)%6)
+                    --nmrk;
 
                 for (int i=0; i<nmrk; ++i) {
                     double ptx = ppt[0] + veclenM6minX*(i+1);
@@ -2160,8 +2306,7 @@ static int       _renderSY_vessel(S52_obj *obj)
     // time marks on vector - 1 min
     if ((0 == S52_PL_cmpCmdParam(obj, "ARPONE01")) ||
         (0 == S52_PL_cmpCmdParam(obj, "AISONE01"))  ) {
-        double     vecper = S52_MP_get(S52_MAR_VECPER);
-        if (0.0 != vecper) {
+        if (1.0 == S52_MP_get(S52_MAR_VECMRK)) {
             // compute symbol offset of each 1 min mark
             double course, speed;
             if (TRUE == _getVesselVector(obj, &course, &speed)) {
@@ -2170,9 +2315,13 @@ static int       _renderSY_vessel(S52_obj *obj)
                 double veclenM1min  = veclenNM1min * NM_METER;
                 double veclenM1minX = veclenM1min  * cos(orientRAD);
                 double veclenM1minY = veclenM1min  * sin(orientRAD);
-                int    nmrk         = vecper;
+                int    nmrk         = (int)S52_MP_get(S52_MAR_VECPER);
 
                 for (int i=0; i<nmrk; ++i) {
+                    // skip 6 min mark
+                    if (0 == (i+1) % 6)
+                        continue;
+
                     double ptx = ppt[0] + veclenM1minX*(i+1);
                     double pty = ppt[1] + veclenM1minY*(i+1);
 
@@ -2196,21 +2345,16 @@ static int       _renderSY_vessel(S52_obj *obj)
         GString *shplenstr = S57_getAttVal(geo, "shplen");
         double   shplen    = (NULL==shplenstr) ? 0.0 : S52_atof(shplenstr->str);
 
-        double scaley      = (_pmax.v - _pmin.v) / (double)_vp[3] ;
-        double shpLenPixel = shplen / scaley;
+        double shpLenPixel = shplen / _scaley;
 
         // drawn VESSEL symbol
         // 1 - if silhoutte too small
         // 2 - OR no silhouette at all
-        if ( ((shpLenPixel*_dotpitch_mm_y) < SHIPS_OUTLINE_MM) || (FALSE==S52_MP_get(S52_MAR_SHIPS_OUTLINE)) ) {
+        if ( ((shpLenPixel*_dotpitch_mm_y) < SHIPS_OUTLINE_MM) || (FALSE==(int) S52_MP_get(S52_MAR_SHIPS_OUTLINE)) ) {
             // 3 - AND active (ie not sleeping)
             if (NULL!=vestatstr && '1'==*vestatstr->str)
                 _renderSY_POINT_T(obj, ppt[0], ppt[1], headng);
         }
-        //double course, speed;
-        //_getVector(obj, &course, &speed);
-
-        //_renderSY_POINT_T(obj, ppt[0], ppt[1], headng);
 
         return TRUE;
     }
@@ -2311,9 +2455,9 @@ static int       _renderSY_leglin(S52_obj *obj)
             // FIXME: compute offset from symbol's bbox
             // S52_PL_getSYbbox(S52_obj *obj, int *width, int *height);
             // FIXME: ajuste XY for rotation
-            SPRINTF(str, "%3.1f kt", plnspd);
+            SNPRINTF(str, 80, "%3.1f kt", plnspd);
 
-            // FIXME: get color from TE & TX commad word
+            // FIXME: get color from TE & TX command word
             S52_Color *color = S52_PL_getColor("CHBLK");
 
             //_renderTXTAA(obj, ppt[0]+offset_x, ppt[1]-offset_y, 0, 0, str);
@@ -2370,39 +2514,7 @@ static int       _renderSY(S52_obj *obj)
         return FALSE;
     }
 
-    if (POINT_T == S57_getObjtype(geoData)) {
-
-        // SOUNDG
-        /* S52_MAR_FONT_SOUNDG deprecated
-        if (0 == g_strcmp0(S57_getName(geoData), "SOUNDG")) {
-            if (TRUE == S52_MP_get(S52_MAR_FONT_SOUNDG)) {
-                double    datum   = S52_MP_get(S52_MAR_DATUM_OFFSET);
-                char      str[16] = {'\0'};
-                double    soundg;
-
-                guint     npt = 0;
-                GLdouble *ppt = NULL;
-
-                if (FALSE==S57_getGeoData(geoData, 0, &npt, &ppt)) {
-                    return FALSE;
-                }
-
-                soundg = ppt[2] + datum;
-
-                if (30.0 > soundg)
-                    g_snprintf(str, 5, "%4.1f", soundg);
-                else
-                    g_snprintf(str, 5, "%4.f", soundg);
-
-                S52_DListData *DListData = S52_PL_getDListData(obj);
-                S52_Color *col = DListData->colors;
-
-                _glColor4ub(col);
-
-                return TRUE;
-            }
-        }
-        */
+    if (S57_POINT_T == S57_getObjtype(geoData)) {
 
         if (0 == g_strcmp0(S57_getName(geoData), "ownshp")) {
             _renderSY_ownshp(obj);
@@ -2430,11 +2542,10 @@ static int       _renderSY(S52_obj *obj)
                 // this light 'touch' a buoy
                 if ((NULL!=other) && (0==g_strcmp0(S57_getName(other), "BOYLAT"))) {
                     // assume that light have a single color in List
-                    S52_Color     *colors    = NULL;
-                    double         deg       = S52_MP_get(S52_MAR_ROT_BUOY_LIGHT);
+                    double deg = S52_MP_get(S52_MAR_ROT_BUOY_LIGHT);
 
-                    S52_DListData *DListData = S52_PL_getDListData(obj);
-                    colors = DListData->colors;
+                    S52_DList *DListData = S52_PL_getDListData(obj);
+                    S52_Color *colors    = DListData->colors;
                     if (0 == g_strcmp0(colors->colName, "LITRD"))
                         orient = deg + 90.0;
                     if (0 == g_strcmp0(colors->colName, "LITGN"))
@@ -2454,7 +2565,7 @@ static int       _renderSY(S52_obj *obj)
     //return TRUE;
 
     // an SY command on a line object (ex light on power line)
-    if (LINES_T == S57_getObjtype(geoData)) {
+    if (S57_LINES_T == S57_getObjtype(geoData)) {
 
         // computer 'center' of line
         double cView_x = (_pmax.u + _pmin.u) / 2.0;
@@ -2510,7 +2621,6 @@ static int       _renderSY(S52_obj *obj)
         }
 
         // find segment's center point closess to view center
-        //for (i=0; i<npt-1; ++i) {
         for (guint i=0; i<npt; ++i) {
             double x = (ppt[i*3+3] + ppt[i*3]  ) / 2.0;
             double y = (ppt[i*3+4] + ppt[i*3+1]) / 2.0;
@@ -2535,7 +2645,7 @@ static int       _renderSY(S52_obj *obj)
     //debug - skip AREAS_T (cost 30msec; from ~110ms to ~80ms on Estuaire du St-L CA279037.000)
     //return TRUE;
 
-    if (AREAS_T == S57_getObjtype(geoData)) {
+    if (S57_AREAS_T == S57_getObjtype(geoData)) {
         guint     npt = 0;
         GLdouble *ppt = NULL;
         if (FALSE==S57_getGeoData(geoData, 0, &npt, &ppt)) {
@@ -2550,12 +2660,15 @@ static int       _renderSY(S52_obj *obj)
             // fill area, because other draw might not fill area
             // case of SY();LS(); (ie no AC() fill)
             {
-                S52_DListData *DListData = S52_PL_getDListData(obj);
+                S52_DList *DListData = S52_PL_getDListData(obj);
                 S52_Color *col = DListData->colors;
                 _glColor4ub(col);
 
+                _glUniformMatrix4fv_uModelview();
+
                 // when in pick mode, fill the area
-                _fillarea(geoData);
+                _fillArea(geoData);
+                //_fillArea(geoData, 0);
             }
 
             // centroid offset might put the symb outside the area
@@ -2653,7 +2766,7 @@ static int       _renderLS_LIGHTS05(S52_obj *obj)
     //PRINTF("S1: %f, S2:%f\n", sectr1, sectr2);
 
     // this is part of CS
-    if (TRUE == S52_MP_get(S52_MAR_FULL_SECTORS)) {
+    if (TRUE == (int) S52_MP_get(S52_MAR_FULL_SECTORS)) {
         GString  *valnmrstr = S57_getAttVal(geoData, "VALNMR");
         if (NULL != valnmrstr) {
             //PRINTF("FIXME: compute leglen to scale (NM)\n");
@@ -2667,28 +2780,21 @@ static int       _renderLS_LIGHTS05(S52_obj *obj)
             pt.x = x1;  // not used
             pt.y = y1;
             pt.z = 0.0;
-//#ifndef S52_USE_GV
             if (FALSE == S57_geo2prj3dv(1, (double*)&pt))
                 return FALSE;
-//#endif
             // position of end of sector nominal range
             ptlen.x = x1; // not used
             ptlen.y = y1 + (valnmr / 60.0);
             ptlen.z = 0.0;
-//#ifndef S52_USE_GV
             if (FALSE == S57_geo2prj3dv(1, (double*)&ptlen))
                 return FALSE;
-//#endif
             {
                 projUV p = {ptlen.x, ptlen.y};
-                //p.u = ptlen.x;
-                //p.v = ptlen.y;
                 p   = _prj2win(p);
                 leglenpix = p.v;
                 p.u = pt.x;
                 p.v = pt.y;
                 p   = _prj2win(p);
-                //leglenpix -= p.v;
                 leglenpix += p.v;
             }
         }
@@ -2697,8 +2803,7 @@ static int       _renderLS_LIGHTS05(S52_obj *obj)
     if (NULL != orientstr) {
         double orient = S52_atof(orientstr->str);
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glRotated(90.0-orient, 0.0, 0.0, 1.0);
@@ -2719,8 +2824,7 @@ static int       _renderLS_LIGHTS05(S52_obj *obj)
     if (NULL != sectr1str) {
         double sectr1 = S52_atof(sectr1str->str);
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glRotated(90.0-sectr1, 0.0, 0.0, 1.0);
@@ -2742,8 +2846,8 @@ static int       _renderLS_LIGHTS05(S52_obj *obj)
     if (NULL != sectr2str) {
         double sectr2 = S52_atof(sectr2str->str);
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        //_glMatrixMode  (GL_MODELVIEW);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glRotated(90.0-sectr2, 0.0, 0.0, 1.0);
@@ -2789,11 +2893,11 @@ static int       _renderLS_ownshp(S52_obj *obj)
 
 
     // draw heading line
-    if ((NULL!=headngstr) && (TRUE==S52_MP_get(S52_MAR_HEADNG_LINE)) && ('1'==pen_w)) {
+    if ((NULL!=headngstr) && (TRUE==(int) S52_MP_get(S52_MAR_HEADNG_LINE)) && ('1'==pen_w)) {
         double orient = S52_PL_getSYorient(obj);
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        //_glMatrixMode  (GL_MODELVIEW);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glScaled(1.0, -1.0, 1.0);
@@ -2817,8 +2921,8 @@ static int       _renderLS_ownshp(S52_obj *obj)
         double orient    = S52_PL_getSYorient(obj);
         double beambrgNM = S52_MP_get(S52_MAR_BEAM_BRG_NM);
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        //_glMatrixMode  (GL_MODELVIEW);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _glScaled(1.0, -1.0, 1.0);
@@ -2850,8 +2954,8 @@ static int       _renderLS_ownshp(S52_obj *obj)
             pt3v   pt[2]     = {{0.0, 0.0, 0.0}, {veclenMX, veclenMY, 0.0}};
             //pt3v   pt[2]     = {{0.0, 0.0, 0.0}, {0.0, veclenM, 0.0}};
 
-            _glMatrixMode(GL_MODELVIEW);
-            _glLoadIdentity();
+            //_glMatrixMode  (GL_MODELVIEW);
+            _glLoadIdentity(GL_MODELVIEW);
 
             _glTranslated(ppt[0], ppt[1], 0.0);
 
@@ -2893,7 +2997,7 @@ static int       _renderLS_vessel(S52_obj *obj)
     // heading line, AIS only
     GString *vesrcestr = S57_getAttVal(geo, "vesrce");
     if (NULL!=vesrcestr && '2'==*vesrcestr->str) {
-        if ((NULL!=headngstr) && (TRUE==S52_MP_get(S52_MAR_HEADNG_LINE)))  {
+        if ((NULL!=headngstr) && (TRUE==(int) S52_MP_get(S52_MAR_HEADNG_LINE)))  {
             GLdouble *ppt = NULL;
             guint     npt = 0;
             if (TRUE == S57_getGeoData(geo, 0, &npt, &ppt)) {
@@ -2901,8 +3005,8 @@ static int       _renderLS_vessel(S52_obj *obj)
                 // draw a line 50mm in length
                 pt3v pt[2] = {{0.0, 0.0, 0.0}, {50.0 / S52_MP_get(S52_MAR_DOTPITCH_MM_X), 0.0, 0.0}};
 
-                _glMatrixMode(GL_MODELVIEW);
-                _glLoadIdentity();
+                //_glMatrixMode  (GL_MODELVIEW);
+                _glLoadIdentity(GL_MODELVIEW);
 
                 _glTranslated(ppt[0], ppt[1], ppt[2]);
                 _glRotated(90.0 - headng, 0.0, 0.0, 1.0);
@@ -2980,24 +3084,30 @@ static int       _renderLS_vessel(S52_obj *obj)
     return TRUE;
 }
 
+#ifdef S52_USE_AFGLOW
 static int       _renderLS_afterglow(S52_obj *obj)
 {
-    (void)obj;
-
-#ifdef S52_USE_AFGLOW
-
-    S57_geo   *geo = S52_PL_getGeo(obj);
-    GLdouble  *ppt = NULL;
-    guint      npt = 0;
-
     if (0.0 == S52_MP_get(S52_MAR_DISP_AFTERGLOW))
         return TRUE;
+
+    S57_geo   *geo = S52_PL_getGeo(obj);
+    guint      pti = S57_getGeoSize(geo);
+    GLdouble  *ppt = NULL;
+    guint      npt = 0;
 
     if (FALSE == S57_getGeoData(geo, 0, &npt, &ppt))
         return TRUE;
 
-    if (0 == npt)
+    if (0 == npt) {
+        PRINTF("DEBUG: afterglow npt = 0\n");
+        g_assert(0);
         return TRUE;
+    }
+    if (0 == pti) {
+        PRINTF("DEBUG: afterglow pti = 0\n");
+        //g_assert(0);
+        return TRUE;
+    }
 
     {   // set color
         S52_Color *col;
@@ -3009,13 +3119,10 @@ static int       _renderLS_afterglow(S52_obj *obj)
 
     //_setBlend(TRUE);
 
-    _checkError("_renderLS_afterglow() .. beg");
+    //_checkError("_renderLS_afterglow() .. beg");
 
     _glPointSize(7.0);
 
-    guint  pti = S57_getGeoSize(geo);
-    if (0 == pti)
-        return TRUE;
 
 #ifdef S52_USE_GL2
     //float   maxAlpha   = 1.0;   // 0.0 - 1.0
@@ -3069,7 +3176,7 @@ static int       _renderLS_afterglow(S52_obj *obj)
     glBindBuffer(GL_ARRAY_BUFFER, _vboIDaftglwVertID);
 
     //glEnableClientState(GL_VERTEX_ARRAY);       // no need to activate vertex coords array - alway on
-    glVertexPointer(3, GL_DOUBLE, 0, 0);          // last param is offset, not ptr
+    glVertexPointer(3, GL_DBL_FLT, 0, 0);          // last param is offset, not ptr
     glColorPointer(4, GL_UNSIGNED_BYTE, 0, 0);
     glBufferData(GL_ARRAY_BUFFER, pti*sizeof(vertex_t)*3, (const void *)ppt, GL_DYNAMIC_DRAW);
 
@@ -3101,20 +3208,19 @@ static int       _renderLS_afterglow(S52_obj *obj)
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 #endif  // S52_USE_GL2
-#endif  // S52_USE_AFGLOW
 
     _checkError("_renderLS_afterglow() .. end");
 
     return TRUE;
 }
+#endif  // S52_USE_AFGLOW
 
 static int       _renderLS(S52_obj *obj)
 // Line Style
-// FIXME: do overlapping line supression (need to find a test case - S52_MAR_SYMBOLIZED_BND)
+// FIXME: do overlapping line suppression (need to find a test case - S52_MAR_SYMBOLIZED_BND)
 // FIX: add clip plane in shader (GLES2)
 {
 #ifdef S52_USE_GV
-    // FIXME
     return FALSE;
 #endif
 
@@ -3167,12 +3273,14 @@ static int       _renderLS(S52_obj *obj)
 
         default:
             PRINTF("ERROR: invalid line style\n");
+            g_assert(0);
+            return FALSE;
     }
 
     {
         S57_geo  *geoData = S52_PL_getGeo(obj);
 
-        if (POINT_T == S57_getObjtype(geoData)) {
+        if (S57_POINT_T == S57_getObjtype(geoData)) {
             if (0 == g_strcmp0("LIGHTS", S57_getName(geoData)))
                 _renderLS_LIGHTS05(obj);
             else {
@@ -3198,7 +3306,7 @@ static int       _renderLS(S52_obj *obj)
         }
         else
         {
-            // LINES_T, AREAS_T
+            // S57_LINES_T, S57_AREAS_T
 
             // FIXME: case of pick AREA where the only commandword is LS()
             // FIX: one more call to fillarea()
@@ -3206,7 +3314,6 @@ static int       _renderLS(S52_obj *obj)
             guint     npt     = 0;
             S57_getGeoData(geoData, 0, &npt, &ppt);
 
-            //*
             // get the current number of positon (this grow as GPS/AIS pos come in)
             if (0 == g_strcmp0("pastrk", S57_getName(geoData))) {
                 npt = S57_getGeoSize(geoData);
@@ -3219,16 +3326,22 @@ static int       _renderLS(S52_obj *obj)
                 _renderLS_ownshp(obj);
                 g_assert(0);
             } else {
+#ifdef S52_USE_AFGLOW
+                // afterglow
                 if ((0 == g_strcmp0("afgves", S57_getName(geoData))) ||
                     (0 == g_strcmp0("afgshp", S57_getName(geoData)))
                    ) {
                     //PRINTF("DEBUG: XXXXXXXXXXXXXXX afgves\n");
                     _renderLS_afterglow(obj);
-                } else {
+                }
+                else
+#endif
+                {
 
 #ifdef S52_USE_GL2
                     _d2f(_tessWorkBuf_f, npt, ppt);
 
+                    // alternate planned route
                     if (0 == g_strcmp0("leglin", S57_getName(geoData))) {
                         // FIXME: move to _renderLS_setPatDott()
                         glUniform1f(_uStipOn, 1.0);
@@ -3258,6 +3371,7 @@ static int       _renderLS(S52_obj *obj)
                         glUniform1f(_uStipOn, 0.0);
 
                     } else {
+                        // all other line
                         _glUniformMatrix4fv_uModelview();
                         _DrawArrays_LINE_STRIP(npt, (vertex_t *)_tessWorkBuf_f->data);
                     }
@@ -3267,9 +3381,6 @@ static int       _renderLS(S52_obj *obj)
 #endif
                 }
             }
-            //*/
-
-
 
 //#ifdef S52_USE_GL2
             // Not usefull with AA
@@ -3430,7 +3541,6 @@ static int       _renderLC(S52_obj *obj)
 
 
 #ifdef S52_USE_GV
-    // FIXME
     return FALSE;
 #endif
 
@@ -3438,10 +3548,10 @@ static int       _renderLC(S52_obj *obj)
     if (S52_CMD_WRD_FILTER_LC & (int) S52_MP_get(S52_CMD_WRD_FILTER))
         return TRUE;
 
-    GLdouble       symlen_pixl = 0.0;
-    GLdouble       symlen_wrld = 0.0;
-    GLdouble       x1,y1,z1,  x2,y2,z2;
-    S57_geo       *geo = S52_PL_getGeo(obj);
+    GLdouble symlen_pixl = 0.0;
+    GLdouble symlen_wrld = 0.0;
+    GLdouble x1,y1,z1,  x2,y2,z2;
+    S57_geo *geo = S52_PL_getGeo(obj);
 
     // draw arc if this is a leglin
     if (0 == g_strcmp0("leglin", S57_getName(geo))) {
@@ -3452,6 +3562,18 @@ static int       _renderLC(S52_obj *obj)
             if (NULL != objNextLeg)
                 _drawArc(obj, objNextLeg);
         }
+
+        //* draw guard zone if highligthed
+        // FIXME: what about arc!
+        if (TRUE == S57_isHighlighted(geo)) {
+            _glLoadIdentity(GL_MODELVIEW);
+
+#ifdef S52_USE_GL2
+            glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
+#endif
+            _DrawArrays_LINE_STRIP(5, _hazardZone);
+        }
+        //*/
     }
 
     GLdouble *ppt = NULL;
@@ -3461,7 +3583,7 @@ static int       _renderLC(S52_obj *obj)
 
     // set pen color & size here because values might not
     // be set via call list --short line
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
     S52_Color *c = DListData->colors;
     _glColor4ub(c);
 
@@ -3490,7 +3612,7 @@ static int       _renderLC(S52_obj *obj)
 
         //////////////////////////////////////////////////////
         //
-        // overlapping Line Complex (LC) supression
+        // overlapping Line Complex (LC) suppression
         //
         if (z1<0.0 && z2<0.0) {
             //PRINTF("NOTE: this line segment (%s) overlap a line segment with higher prioritity (Z=%f)\n", S57_getName(geo), z1);
@@ -3547,9 +3669,7 @@ static int       _renderLC(S52_obj *obj)
 
         // draw symb's as long as it fit the line length
         for (int j=0; j<nsym; ++j) {
-            // reset origine
-            _glMatrixMode(GL_MODELVIEW);
-            _glLoadIdentity();
+            _glLoadIdentity(GL_MODELVIEW);
 
             _glTranslated(x1+offset_wrld_x, y1+offset_wrld_y, 0.0);           // move coord sys. at symb pos.
             _glRotated(segang, 0.0, 0.0, 1.0);    // rotate coord sys. on Z
@@ -3569,7 +3689,7 @@ static int       _renderLC(S52_obj *obj)
         // FIXME: some Complex Line (LC) symbol allway use blending (ie transparancy)
         // but now with GLES2 AA its all or nothing
         //_setBlend(TRUE);
-        //if (TRUE == S52_MP_get(S52_MAR_ANTIALIAS)) {
+        //if (TRUE == (int) S52_MP_get(S52_MAR_ANTIALIAS)) {
         //    glEnable(GL_BLEND);
         //}
 
@@ -3668,7 +3788,7 @@ static int       _renderAC_LIGHTS05(S52_obj *obj)
 #endif
 
         // first pass - create VBO
-        S52_DListData *DList = S52_PL_getDListData(obj);
+        S52_DList *DList = S52_PL_getDListData(obj);
         if (NULL == DList) {
             DList = S52_PL_newDListData(obj);
             DList->nbr = 2;
@@ -3716,8 +3836,8 @@ static int       _renderAC_LIGHTS05(S52_obj *obj)
         //_setBlend(TRUE);
 
 
-        _glMatrixMode(GL_MODELVIEW);
-        _glLoadIdentity();
+        //_glMatrixMode  (GL_MODELVIEW);
+        _glLoadIdentity(GL_MODELVIEW);
 
         _glTranslated(ppt[0], ppt[1], 0.0);
         _pushScaletoPixel(FALSE);
@@ -3751,9 +3871,10 @@ static int       _renderAC_VRMEBL01(S52_obj *obj)
     if (0 != g_strcmp0("vrmark", S57_getName(geo))) {
         PRINTF("ERROR: not a 'vrmark' (%s)\n", S57_getName(geo));
         g_assert(0);
+        return FALSE;
     }
 
-    S52_DListData *DListData = S52_PL_getDListData(obj);
+    S52_DList *DListData = S52_PL_getDListData(obj);
     if (NULL == DListData) {
         DListData = S52_PL_newDListData(obj);
         DListData->nbr       = 1;
@@ -3790,18 +3911,16 @@ static int       _renderAC_VRMEBL01(S52_obj *obj)
     if (FALSE == S57_getPrimData(_diskPrimTmp, &primNbr, &vert, &vertNbr, &DList))
         return FALSE;
 
-
     //_setBlend(TRUE);
 
-    _glMatrixMode(GL_MODELVIEW);
-    _glLoadIdentity();
+    _glLoadIdentity(GL_MODELVIEW);
 
     _glTranslated(ppt[0], ppt[1], 0.0);
 
 #ifdef S52_USE_GL2
     glUniformMatrix4fv(_uModelview,  1, GL_FALSE, _mvm[_mvmTop]);
 #else
-    glVertexPointer(3, GL_DOUBLE, 0, 0);              // last param is offset, not ptr
+    glVertexPointer(3, GL_DBL_FLT, 0, 0);              // last param is offset, not ptr
 #endif
 
     GString *normallinestylestr = S57_getAttVal(geo, "_normallinestyle");
@@ -3823,7 +3942,7 @@ static int       _renderAC_VRMEBL01(S52_obj *obj)
 static int       _renderAC(S52_obj *obj)
 // Area Color (also filter light sector)
 {
-    // debug - this filter also in _VBODrawArrays():glDraw()
+    // debug - this filter also in _VBODrawArrays_AREA():glDraw()
     if (S52_CMD_WRD_FILTER_AC & (int) S52_MP_get(S52_CMD_WRD_FILTER))
         return TRUE;
 
@@ -3831,24 +3950,24 @@ static int       _renderAC(S52_obj *obj)
     S57_geo   *geo = S52_PL_getGeo(obj);
 
     // LIGHTS05
-    if (POINT_T == S57_getObjtype(geo)) {
+    if (S57_POINT_T == S57_getObjtype(geo)) {
         _renderAC_LIGHTS05(obj);
         return TRUE;
     }
 
     // VRM
-    if ((LINES_T==S57_getObjtype(geo)) && (0==g_strcmp0("vrmark", S57_getName(geo)))) {
+    if ((S57_LINES_T==S57_getObjtype(geo)) && (0==g_strcmp0("vrmark", S57_getName(geo)))) {
         _renderAC_VRMEBL01(obj);
         return TRUE;
     }
 
     _glColor4ub(c);
 
-//#if !defined(S52_USE_GV)
     _glUniformMatrix4fv_uModelview();
-//#endif
 
-    _fillarea(geo);
+    //char LOD = S52_PL_getLOD(obj);
+    _fillArea(geo);
+    //_fillArea(geo, LOD);
 
     _checkError("_renderAC()");
 
@@ -3857,7 +3976,7 @@ static int       _renderAC(S52_obj *obj)
 
 static int       _renderAP_NODATA_layer0(void)
 {
-    // debug - this filter also in _VBODrawArrays():glDraw()
+    // debug - this filter also in _VBODrawArrays_AREA():glDraw()
     if (S52_CMD_WRD_FILTER_AP & (int) S52_MP_get(S52_CMD_WRD_FILTER))
         return TRUE;
 
@@ -3913,7 +4032,6 @@ static int       _renderAP_NODATA_layer0(void)
     glFrontFace(GL_CW);
 
     glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
-    //glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glFrontFace(GL_CCW);
 
@@ -3964,7 +4082,7 @@ static int       _renderAP(S52_obj *obj)
 // Area Pattern
 // NOTE: S52 define pattern rotation but doesn't use it in PLib, so not implemented.
 {
-    // debug - this filter also in _VBODrawArrays():glDraw()
+    // debug - this filter also in _VBODrawArrays_AREA():glDraw()
     if (S52_CMD_WRD_FILTER_AP & (int) S52_MP_get(S52_CMD_WRD_FILTER))
         return TRUE;
 
@@ -3975,7 +4093,6 @@ static int       _renderAP(S52_obj *obj)
 
 
 #ifdef S52_USE_GV
-    // FIXME
     return FALSE;
 #endif
 
@@ -3993,7 +4110,7 @@ static int       _renderAP(S52_obj *obj)
         S52_Color dummy;
 
         _glColor4ub(&dummy);
-        _fillarea(geoData);
+        _fillArea(geoData);
 
         return TRUE;
     }
@@ -4044,13 +4161,14 @@ static int       _renderTXTAA(S52_obj *obj, S52_Color *color, double x, double y
     // TODO: use 'bsize'
     (void) bsize;
 
-    g_assert(NULL != color);
+    //g_assert(NULL != color);
 
     if (S52_CMD_WRD_FILTER_TX & (int) S52_MP_get(S52_CMD_WRD_FILTER))
         return TRUE;
 
     if (weight >= S52_MAX_FONT) {
         PRINTF("ERROR: weight(%i) >= S52_MAX_FONT(%i)\n", weight, S52_MAX_FONT);
+        g_assert(0);
         return FALSE;
     }
 
@@ -4148,7 +4266,7 @@ static int       _renderTXTAA(S52_obj *obj, S52_Color *color, double x, double y
 #endif  // S52_USE_FREETYPE_GL
 
 #ifdef S52_USE_GLC
-    if (TRUE == S52_MP_get(S52_MAR_ANTIALIAS)) {
+    if (TRUE == (int) S52_MP_get(S52_MAR_ANTIALIAS)) {
 
         _glMatrixSet(VP_WIN);
 
@@ -4277,7 +4395,7 @@ static int       _renderTXT(S52_obj *obj)
     }
 
     // supress display of text
-    if (FALSE == S52_MP_getTextDisp(disIdx))
+    if (FALSE == (int) S52_MP_getTextDisp(disIdx))
         return FALSE;
 
     // convert offset to PRJ
@@ -4286,21 +4404,21 @@ static int       _renderTXT(S52_obj *obj)
 
     //PRINTF("uoffs/voffs: %f/%f %s\n", uoffs, voffs, str);
 
-    if (POINT_T == S57_getObjtype(geoData)) {
+    if (S57_POINT_T == S57_getObjtype(geoData)) {
         _renderTXTAA(obj, color, ppt[0]+uoffs, ppt[1]-voffs, bsize, weight, str);
 
         return TRUE;
     }
 
-    if (LINES_T == S57_getObjtype(geoData)) {
+    if (S57_LINES_T == S57_getObjtype(geoData)) {
         if (0 == g_strcmp0("pastrk", S57_getName(geoData))) {
             // past track time
             for (guint i=0; i<npt; ++i) {
                 gchar s[80];
                 int timeHH = ppt[i*3 + 2] / 100;
                 int timeMM = ppt[i*3 + 2] - (timeHH * 100);
-                //SPRINTF(s, "t%04.f", ppt[i*3 + 2]);     // S52 PASTRK01 say frefix a 't'
-                SPRINTF(s, "%02i:%02i", timeHH, timeMM);  // ISO say HH:MM
+                //SNPRINTF(s, 80, "t%04.f", ppt[i*3 + 2]);     // S52 PASTRK01 say frefix a 't'
+                SNPRINTF(s, 80, "%02i:%02i", timeHH, timeMM);  // ISO say HH:MM
 
                 //_renderTXTAA(obj, ppt[i*3 + 0], ppt[i*3 + 1], bsize, weight, s);
                 //_renderTXTAA(obj, ppt[i*3 + 0]+uoffs, ppt[i*3 + 1]-voffs, bsize, weight, s);
@@ -4319,7 +4437,7 @@ static int       _renderTXT(S52_obj *obj)
 
             if (orient < 0) orient += 360.0;
 
-            SPRINTF(s, "%s %03.f", str, orient);
+            SNPRINTF(s, 80, "%s %03.f", str, orient);
 
             //_renderTXTAA(obj, x, y, bsize, weight, s);
             //_renderTXTAA(obj, x+uoffs, y-voffs, bsize, weight, s);
@@ -4338,7 +4456,7 @@ static int       _renderTXT(S52_obj *obj)
 
             if (orient < 0) orient += 360.0;
 
-            SPRINTF(s, "%03.f cog", orient);
+            SNPRINTF(s, 80, "%03.f cog", orient);
 
             //_renderTXTAA(obj, x, y, bsize, weight, s);
             //_renderTXTAA(obj, x+uoffs, y-voffs, bsize, weight, s);
@@ -4377,7 +4495,7 @@ static int       _renderTXT(S52_obj *obj)
         return TRUE;
     }
 
-    if (AREAS_T == S57_getObjtype(geoData)) {
+    if (S57_AREAS_T == S57_getObjtype(geoData)) {
 
         _computeCentroid(geoData);
 
@@ -4412,16 +4530,15 @@ static int       _renderTXT(S52_obj *obj)
 
 static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
 // Display List generator - use for VBO also
-// VBO: collect all vectors for 1 colour
+// VBO: collect all vectors for 1 colour/pen_w/trans
 {
     // Assume: a width of 1 unit is 1 pixel.
-    // WARNING: offet might need adjustment since bounding box
-    // doesn't include line tickness.
+    // WARNING: offet might need adjustment since bounding box doesn't include line tickness.
     // Note: Pattern upto PLib 3.2, use a line width of 1.
-    // Note: transparency: 0=0%(opaque), 1=25%, 2=50%, 3=75%
+    // Note: transparency: '0'=0%(opaque), '1'=25%, '2'=50%, '3'=75%
 
     // FIXME: instruction EP (Edge Polygon), AA (Arc Angle) and SC (Symbol Call)
-    //        are not used in current PLib/Chart-1, so not implemented.
+    //        are not used i PLib/Chart-1 3.1, so not implemented.
 
     GLenum    fillMode = GLU_SILHOUETTE;
     //GLenum    fillMode = GLU_FILL;
@@ -4440,25 +4557,44 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
     //if (0==strncmp("CHKSYM01", S52_PL_getVOname(vecObj), 8)) {
     //    PRINTF("Vector Object Name: %s  Command: %c\n", S52_PL_getVOname(vecObj), vcmd);
     //}
+    // Note: bbx = 7173, bby = 1445, pivot_x = 7371, pivot_y = 1657
+    // SYMD   39 AISSIX01 V 07371 01657 00405 00214 07173 01445
+    //if (0==strncmp("AISSIX01", S52_PL_getVOname(vecObj), 8)) {
+    //    PRINTF("Vector Object Name: %s  Command: %c\n", S52_PL_getVOname(vecObj), vcmd);
+    //}
 
-    // skip first token if it's S52_VC_NEW
-    //if (S52_VC_NEW == vcmd)
+    /*
+    // FIXME: CHRVID01, CHRVID02, CHDATD01 in PLib 4.0 draft as xyz coord. The code should handle
+    // wrong input gracefully - xy; instead of xyz; the latter is not apparently in S52 4.0
+    if (0==strncmp("CHRVID01", S52_PL_getVOname(vecObj), 8)) {
+        PRINTF("Vector Object Name: %s  Command: %c\n", S52_PL_getVOname(vecObj), vcmd);
+        return vertex;
+    }
+    if (0==strncmp("CHRVID02", S52_PL_getVOname(vecObj), 8)) {
+        PRINTF("Vector Object Name: %s  Command: %c\n", S52_PL_getVOname(vecObj), vcmd);
+        return vertex;
+    }
+    if (0==strncmp("CHDATD01", S52_PL_getVOname(vecObj), 8)) {
+        PRINTF("Vector Object Name: %s  Command: %c\n", S52_PL_getVOname(vecObj), vcmd);
+        return vertex;
+    }
+    //*/
 
     // debug - check if more than one NEW token - YES
     while (S52_VC_NEW == vcmd) {
         vcmd = S52_PL_getNextVOCmd(vecObj);
-        //g_assert(0);
     }
 
     while ((S52_VC_NONE!=vcmd) && (S52_VC_NEW!=vcmd)) {
 
         switch (vcmd) {
 
-            case S52_VC_NONE: break; //continue;
-
+            case S52_VC_NONE: break;
             case S52_VC_NEW:  break;
 
+            /*
             case S52_VC_SW: { // this mean there is a change in pen width
+
 #if !defined(S52_USE_OPENGL_VBO)
                 // draw vertex with previous pen width
                 GArray *v = S57_getPrimVertex(vertex);
@@ -4467,12 +4603,12 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                     _DrawArrays(vertex);
                     S57_initPrim(vertex); //reset
                     glLineWidth(pen_w - '0');
-                    //glLineWidth(pen_w - '0' - 0.5);
                     _glPointSize(pen_w - '0');
                 }
 #endif
                 break;
             }
+            //*/
 
             // NOTE: entering poly mode fill a circle (CI) when a CI command
             // is found between PM0 and PM2
@@ -4492,15 +4628,11 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
 
                 GLdouble  outer  = radius;     // in 0.01mm unit
 
-                // pass 'vertex' via global '_diskPrimTmp' used by _gluDisk()
-                _diskPrimTmp = vertex;
-
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
                 // compose symb need translation at render-time
                 // (or add offset everything afterward!)
-                //_glBegin(_QUADRIC_TRANSLATE, vertex);
                 _glBegin(_TRANSLATE, vertex);
-                _vertex3f(data, vertex);
+                S57_addPrimVertex(vertex, data);
                 _glEnd(vertex);
 #else
                 glMatrixMode(GL_MODELVIEW);
@@ -4508,7 +4640,10 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                 glTranslated(data[0], data[1], data[2]);
 #endif
 
-#ifdef  S52_USE_OPENGL_VBO
+                // pass 'vertex' via global '_diskPrimTmp' used by _gluDisk()
+                _diskPrimTmp = vertex;
+
+#ifdef S52_USE_OPENGL_VBO
                 if (GLU_FILL == fillMode) {
                     // FIXME: optimisation, draw a point instead of a filled disk
                     _gluQuadricDrawStyle(_qobj, GLU_FILL);
@@ -4524,14 +4659,13 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                     gluDisk(_qobj, inner, outer, slices, loops);
                 }
 #endif
-                // finish with tmp buffer
+                // finish with tmp pointer to buffer
                 _diskPrimTmp = NULL;
 
 
-#if !defined( S52_USE_OPENGL_VBO)
+#if !defined(S52_USE_OPENGL_VBO)
                 // when in fill mode draw outline (antialias)
                 gluQuadricDrawStyle(_qobj, GLU_SILHOUETTE);
-                //gluQuadricDrawStyle(_qobj, GLU_LINE);
                 gluDisk(_qobj, inner, outer, slices, loops);
                 glPopMatrix();
 #endif
@@ -4563,7 +4697,9 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                 _f2d(_tessWorkBuf_d, vec->len, data);
                 double *dptr = (double*)_tessWorkBuf_d->data;
                 for (guint i=0; i<_tessWorkBuf_d->len; ++i, dptr+=3) {
+                //for (guint i=0; i<vec->len; ++i, data+=3) {
                     gluTessVertex(_tobj, (GLdouble*)dptr, (void*)dptr);
+                    //gluTessVertex(_tobj, data, (void*)data);
                     //PRINTF("x/y/z %f/%f/%f\n", dptr[0], dptr[1], dptr[2]);
                 }
 #else
@@ -4599,19 +4735,16 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
 
             case S52_VC_PD:    // pen down
             case S52_VC_PU: {  // pen up
-                GArray   *vec  = S52_PL_getVOdata(vecObj);
-                //vertex_t *data = (vertex_t *)vec->data;
-
-                // paranoi
+                /*
+                // paranoia
+                GArray *vec = S52_PL_getVOdata(vecObj);
                 if (0 == vec->len) {
                     PRINTF("Vector Object Name: %s  Command: %c - NO VECTOR!\n", S52_PL_getVOname(vecObj), vcmd);
                     g_assert(0);
                     break;
                 }
+                */
 
-                //*
-                // split STRIP into LINES
-                //if (1 < vec->len)
                 {
                     _glBegin(GL_LINES,  vertex);
                     while ((S52_VC_PD==vcmd) || (S52_VC_PU==vcmd)) {
@@ -4623,33 +4756,30 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                             continue;
 
                         // POINTS
-                        //if (1 == vec->len)
-                        //    break;
                         // draw points as a short line so one glDraw call
                         // to render all: points, lines, strip to save a lone glDraw point call
                         if (1 == vec->len) {
                             vertex_t data1[3] = {data[0]+20.0, data[1]+20.0, 0.0};
-                            _vertex3f(data, vertex);
-                            _vertex3f(data1, vertex);
+                            S57_addPrimVertex(vertex, data);
+                            S57_addPrimVertex(vertex, data1);
                             vcmd = S52_PL_getNextVOCmd(vecObj);
                             continue;
                         }
 
                         // LINES
                         if (2 == vec->len) {
-                            _vertex3f(data+0, vertex);
-                            //data+=3;
-                            _vertex3f(data+3, vertex);
+                            S57_addPrimVertex(vertex, data+0);
+                            S57_addPrimVertex(vertex, data+3);
                             vcmd = S52_PL_getNextVOCmd(vecObj);
                             continue;
                         }
 
                         // split STRIP into LINES
-                        //for (guint i=0; i<vec->len-1; ++i, data+=3) {
-                        for (guint i=0; (i+1)<vec->len; ++i, data+=3) {
-                            _vertex3f(data+0, vertex);
-                            _vertex3f(data+3, vertex);
+                        for (guint i=1; i<vec->len; ++i, data+=3) {
+                            S57_addPrimVertex(vertex, data+0);
+                            S57_addPrimVertex(vertex, data+3);
                         }
+
                         vcmd = S52_PL_getNextVOCmd(vecObj);
                     }
                     _glEnd(vertex);
@@ -4657,101 +4787,14 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
                     // vcmd is set, go to the outer while
                     continue;
                 }
-                /*
-                else {
-                    _glBegin(GL_POINTS, vertex);
-                    while ((S52_VC_PD==vcmd) || (S52_VC_PU==vcmd)) {
-                        GArray   *vec  = S52_PL_getVOdata(vecObj);
-                        vertex_t *data = (vertex_t *)vec->data;
 
-                        // not POINTS
-                        if (1 != vec->len)
-                            break;
-
-                        _vertex3f(data, vertex);
-                        vcmd = S52_PL_getNextVOCmd(vecObj);
-                    }
-                    _glEnd(vertex);
-                    continue;
-                }
-                //*/
-
-                /*
-                // accumulate LINES segment
-                if (2 == vec->len) {
-                    _glBegin(GL_LINES, vertex);
-
-                    _vertex3f(data, vertex);
-                    data+=3;
-                    _vertex3f(data, vertex);
-
-                    vcmd = S52_PL_getNextVOCmd(vecObj);
-                    while ((S52_VC_PD==vcmd) || (S52_VC_PU==vcmd)) {
-                        GArray   *vec  = S52_PL_getVOdata(vecObj);
-                        vertex_t *data = (vertex_t *)vec->data;
-
-                        // LINES
-                        if (2 == vec->len) {
-                            _vertex3f(data, vertex);
-                            data+=3;
-                            _vertex3f(data, vertex);
-                            vcmd = S52_PL_getNextVOCmd(vecObj);
-                        } else {
-                            break;  // not LINES, break out of the inner while
-                        }
-                    }
-                    _glEnd(vertex);
-
-                    // vcmd is set, go to the outer while
-                    continue;
-                }
-                //*/
-
-                /*
-                if (1 == vec->len) {
-                    _glBegin(GL_POINTS,     vertex);
-                } else {
-                    _glBegin(GL_LINE_STRIP, vertex);
-                }
-                //*/
-
-/*
-#ifdef S52_USE_GL2
-                for (guint i=0; i<vec->len; ++i, data+=3) {
-                    _vertex3f(data, vertex);
-                }
-#else
-                for (guint i=0; i<vec->len; ++i, data+=3) {
-                    _vertex3d(data, vertex);
-                }
-#endif
-                // close loop by inserting last pen position
-                // before entering polygon mode
-                // this is to fix OBSTRN11 line on it side
-                // other symbole (ex BOYLAT) have extra vector to close the loop
-                if (NULL != fristCoord) {
-                    unsigned int idx = (vec->len-1) * 3;
-                    if (fristCoord[0] == data[idx] && fristCoord[1] == data[idx + 1]) {
-                        PRINTF("WARNING: same coord (%7.1f,%7.1f): %s\n", fristCoord[0], fristCoord[1], S52_PL_getVOname(vecObj));
-                    } else {
-                        _vertex3f(fristCoord, vertex);
-                        fristCoord = NULL;
-                    }
-                }
-
-                _glEnd(vertex);
-
-                //_DrawArrays(vertex);
-                //S57_initPrim(vertex); //reset
-                //continue;
-                break;
-*/
             }
 
             // should not get here since these command
-            // have already been filtered out in _filterVector()
-            case S52_VC_ST: // transparancy
+            // have already been filtered out in _filterVector() & S52_PL_getNextVOCmd()
             case S52_VC_SP: // color
+            case S52_VC_SW: // pen_w
+            case S52_VC_ST: // transparancy
             case S52_VC_SC: // symbol call
 
             // not used in PLib --not implemented
@@ -4760,6 +4803,7 @@ static S57_prim *_parseHPGL(S52_vec *vecObj, S57_prim *vertex)
             default:
                 PRINTF("ERROR: invalid vector command: (%c)\n", vcmd);
                 g_assert(0);
+                return vertex;
         }
 
         vcmd = S52_PL_getNextVOCmd(vecObj);
@@ -4785,8 +4829,8 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
     // 'data' not used
     (void) data;
 
-    S52_cmdDef    *cmdDef = (S52_cmdDef*)value;
-    S52_DListData *DL     = S52_PL_getDLData(cmdDef);
+    S52_cmdDef *cmdDef = (S52_cmdDef*)value;
+    S52_DList  *DL     = S52_PL_getDLData(cmdDef);
 
     //PRINTF("PATTERN: %s\n", (char*)key);
 
@@ -4794,7 +4838,7 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
     if (FALSE == DL->create)
         return FALSE;
 
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
     if (TRUE == glIsBuffer(DL->vboIds[0])) {
         // NOTE: DL->nbr is 1 - all pattern in PLib have only one color
         // but this is not in S52 specs (check this)
@@ -4802,12 +4846,14 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
 
         PRINTF("TODO: debug this code path\n");
         g_assert(0);
+        return FALSE;
     }
 
     // debug
     if (MAX_SUBLIST < DL->nbr) {
         PRINTF("ERROR: sublist overflow -1-\n");
         g_assert(0);
+        return FALSE;
     }
 
 #else   // S52_USE_OPENGL_VBO
@@ -4828,6 +4874,7 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
     if (0 == DL->vboIds[0]) {
         PRINTF("ERROR: glGenLists() failed .. exiting\n");
         g_assert(0);
+        return FALSE;
     }
     glNewList(DL->vboIds[0], GL_COMPILE);
 
@@ -4843,15 +4890,16 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
     else {
         PRINTF("ERROR: DL->prim[0] not NULL\n");
         g_assert(0);
+        return FALSE;
     }
 
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
     // using VBO we need to keep some info (mode, first, count)
     DL->prim[0]   = _parseHPGL(vecObj, DL->prim[0]);
     DL->vboIds[0] = _VBOCreate(DL->prim[0]);
 
     // set normal mode
-    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    //glBindBuffer(GL_ARRAY_BUFFER, 0);
 
 #else   // S52_USE_OPENGL_VBO
 
@@ -4859,12 +4907,6 @@ static GLint     _buildPatternDL(gpointer key, gpointer value, gpointer data)
     glEndList();
 
 #endif  // S52_USE_OPENGL_VBO
-
-    {   // save pen width
-        char pen_w = S52_PL_getVOwidth(vecObj);
-        S52_PL_setLCdata((S52_cmdDef*)value, pen_w);
-    }
-
 
     S52_PL_doneVOCmd(vecObj);
 
@@ -4880,8 +4922,8 @@ static GLint     _buildSymbDL(gpointer key, gpointer value, gpointer data)
     // 'data' not used
     (void) data;
 
-    S52_cmdDef    *cmdDef = (S52_cmdDef*)value;
-    S52_DListData *DL     = S52_PL_getDLData(cmdDef);
+    S52_cmdDef *cmdDef = (S52_cmdDef*)value;
+    S52_DList  *DL     = S52_PL_getDLData(cmdDef);
 
     // is this symbol need to be re-created (update PLib)
     if (FALSE == DL->create)
@@ -4891,14 +4933,16 @@ static GLint     _buildSymbDL(gpointer key, gpointer value, gpointer data)
     if (MAX_SUBLIST < DL->nbr) {
         PRINTF("ERROR: sublist overflow -0-\n");
         g_assert(0);
+        return FALSE;
     }
 
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
     if (TRUE == glIsBuffer(DL->vboIds[0])) {
         glDeleteBuffers(DL->nbr, &DL->vboIds[0]);
 
         PRINTF("TODO: debug this code path\n");
         g_assert(0);
+        return FALSE;
     }
 
     //glGenBuffers(DL->nbr, &DL->vboIds[0]);
@@ -4933,10 +4977,11 @@ static GLint     _buildSymbDL(gpointer key, gpointer value, gpointer data)
         else {
             PRINTF("ERROR: DL->prim[i] not NULL\n");
             g_assert(0);
+            return FALSE;
         }
     }
 
-#ifdef  S52_USE_OPENGL_VBO
+#ifdef S52_USE_OPENGL_VBO
     for (guint i=0; i<DL->nbr; ++i) {
         // using VBO we need to keep some info (mode, first, count)
         DL->prim[i]   = _parseHPGL(vecObj, DL->prim[i]);
@@ -4956,12 +5001,6 @@ static GLint     _buildSymbDL(gpointer key, gpointer value, gpointer data)
     }
 #endif // S52_USE_OPENGL_VBO
 
-
-    {   // save some data for later
-        char pen_w = S52_PL_getVOwidth(vecObj);
-        S52_PL_setLCdata((S52_cmdDef*)value, pen_w);
-    }
-
     _checkError("_buildSymbDL()");
 
     S52_PL_doneVOCmd(vecObj);
@@ -4970,14 +5009,11 @@ static GLint     _buildSymbDL(gpointer key, gpointer value, gpointer data)
 }
 
 static GLint     _createSymb(void)
-// WARNING: this must be done from inside the main loop!
 {
-
     if (TRUE == _symbCreated)
         return TRUE;
 
-    // FIXME: what if the screen is to small !?
-    //glGetIntegerv(GL_VIEWPORT, _vp);
+    // FIXME: what if the ViewPort is to small !?
 
     _glMatrixSet(VP_WIN);
 
@@ -4996,7 +5032,7 @@ static GLint     _createSymb(void)
 
     _symbCreated = TRUE;
 
-    PRINTF("INFO: PLib sym created ..\n");
+    PRINTF("DEBUG: PLib sym created ..\n");
 
     return TRUE;
 }
@@ -5005,13 +5041,13 @@ int        S52_GL_isSupp(S52_obj *obj)
 // TRUE if display of object is suppressed
 // also collect stat
 {
-    if (S52_SUP_ON == S52_PL_getToggleState(obj)) {
+    if (S52_SUPP_ON == S52_PL_getObjToggleState(obj)) {
         ++_oclip;
         return TRUE;
     }
 
     // SCAMIN
-    if (TRUE == S52_MP_get(S52_MAR_SCAMIN)) {
+    if (TRUE == (int) S52_MP_get(S52_MAR_SCAMIN)) {
         S57_geo *geo  = S52_PL_getGeo(obj);
         double scamin = S57_getScamin(geo);
 
@@ -5024,10 +5060,10 @@ int        S52_GL_isSupp(S52_obj *obj)
     return FALSE;
 }
 
-int        S52_GL_isOFFscreen(S52_obj *obj)
+int        S52_GL_isOFFview(S52_obj *obj)
 // TRUE if object not in view
 {
-    /*
+    //*
     // debug: CHKSYM01 land here because it is on layer 8, other use layer 9
     S57_geo *geo  = S52_PL_getGeo(obj);
     if (0 == g_strcmp0("$CSYMB", S57_getName(geo))) {
@@ -5040,11 +5076,15 @@ int        S52_GL_isOFFscreen(S52_obj *obj)
         if (0 == g_strcmp0(attval->str, "BLKADJ01"))
             return FALSE;
 
-        PRINTF("%s:%s\n", S57_getName(geo), attval->str);
+        //PRINTF("DEBUG: %s:%s\n", S57_getName(geo), attval->str);
 
         return FALSE;
     }
-    */
+    //*/
+
+    //if (0 == g_strcmp0(S52_PL_getOBCL(obj), "pastrk")) {
+    //    PRINTF("DEBUG: pastrk FOUND\n");
+    //}
 
     {   // geo extent _gmin/max
         double x1,y1,x2,y2;
@@ -5086,7 +5126,7 @@ static int       _newTexture(S52_GL_ras *raster)
     float min  =  INFINITY;
     float max  = -INFINITY;
 
-    float safe = S52_MP_get(S52_MAR_SAFETY_CONTOUR) * -1.0;  // change signe
+    float safe = (float) S52_MP_get(S52_MAR_SAFETY_CONTOUR) * -1.0;  // change signe
     //unsigned char safe = 100;
 
     float *dataf = (float*) raster->data;
@@ -5340,6 +5380,9 @@ int        S52_GL_draw(S52_obj *obj, gpointer user_data)
     //    PRINTF("$CSYMB found\n");
     //    //return;
     //}
+    //if (0 == g_strcmp0(S52_PL_getOBCL(obj), "pastrk")) {
+    //    PRINTF("DEBUG: pastrk FOUND\n");
+    //}
     //if (S52_GL_PICK == _crnt_GL_cycle) {
     //    S57_geo *geo = S52_PL_getGeo(obj);
     //    GString *FIDNstr = S57_getAttVal(geo, "FIDN");
@@ -5365,6 +5408,12 @@ int        S52_GL_draw(S52_obj *obj, gpointer user_data)
 
     if (S52_GL_PICK == _crnt_GL_cycle) {
         ++_cIdx.color.r;
+
+        // stack obj
+        if (0.0 != S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+            g_ptr_array_add(_objPick, obj);
+            PRINTF("DEBUG: %i - pick: %s\n", _cIdx.color.r, S52_PL_getOBCL(obj));
+        }
     }
 
     ++_nobj;
@@ -5403,106 +5452,27 @@ int        S52_GL_draw(S52_obj *obj, gpointer user_data)
     // Can cursor pick now use the journal in S52.c instead of the GPU?
     // NO, if extent is use then concave AREA and LINES can trigger false positive
     if (S52_GL_PICK == _crnt_GL_cycle) {
-        // FIXME: optimisation - read only once all draw to get the top obj
-        // FIXME: copy to texture then test pixels!
-        // FB --> TEX
-        //glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, 8, 8, 0);
-        // TEX --> MEM
-        // gl...
-        // -OR-
-        // a shader trick! .. put the pixels back in an array then back to main!!
+        if (2.0==S52_MP_get(S52_MAR_DISP_CRSR_PICK) || 3.0==S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+            // WARNING: some graphic card preffer RGB / BYTE .. YMMV
+            // FIXME: optimisation: shader trick! .. put the pixels back in an array then back to main!!
+            // FIXME: use _fb_format (rgb/rgba) and EGL rgb/rgba
+            //glReadPixels(_vp[0], _vp[1], 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
+            //glReadPixels(_vp[0], _vp[1], 8, 8, GL_RGB, GL_UNSIGNED_BYTE, &_pixelsRead);
+            //glReadPixels(_vp[0], _vp[1], 1, 1, GL_RGB, GL_UNSIGNED_BYTE, &_pixelsRead);
+            //glReadPixels(_vp[0], _vp[1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
+            glReadPixels(_vp.x, _vp.y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
 
+            _checkError("S52_GL_draw():glReadPixels()");
 
-        // WARNING: some graphic card preffer RGB / BYTE .. YMMV
-        //glReadPixels(_vp[0], _vp[1], 8, 8, GL_RGB, GL_UNSIGNED_BYTE, &_pixelsRead);
-        glReadPixels(_vp[0], _vp[1], 8, 8, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
-
-        _checkError("S52_GL_draw():glReadPixels()");
-
-        for (int i=0; i<(8*8); ++i) {
-            if (_pixelsRead[i].color.r == _cIdx.color.r) {
+            if (_pixelsRead[0].color.r == _cIdx.color.r) {
                 g_ptr_array_add(_objPick, obj);
 
                 // debug
-                PRINTF("pixel found (%i, %i): i=%i color=%X\n", _vp[0], _vp[1], i, _cIdx.color.r);
-                break;
+                //PRINTF("DEBUG: pixel found (%i, %i): i=%i color=%X\n", _vp[0], _vp[1], 0, _cIdx.color.r);
+                PRINTF("DEBUG: pixel found (%i, %i): i=%i color=%X\n", _vp.x, _vp.y, 0, _cIdx.color.r);
             }
         }
-
-        // debug - dump pixel
-        /*
-        for (int i=7; i>=0; --i) {
-            int j = i*8;
-            printf("%i |%X %X %X %X %X %X %X %X|\n", i,
-                   _pixelsRead[j+0].color.r, _pixelsRead[j+1].color.r, _pixelsRead[j+2].color.r,
-                   _pixelsRead[j+3].color.r, _pixelsRead[j+4].color.r, _pixelsRead[j+5].color.r,
-                   _pixelsRead[j+6].color.r, _pixelsRead[j+7].color.r;
-        }
-        printf("finish with object: cIdx: %X\n", _cIdx.idx);
-        printf("----------------------------\n");
-        */
     }
-
-
-    return TRUE;
-}
-
-static int       _doProjection(double centerLat, double centerLon, double rangeDeg)
-{
-    //if (isnan(centerLat) || isnan(centerLon) || isnan(rangeDeg))
-    //    return FALSE;
-
-    pt3 NE = {0.0, 0.0, 0.0};  // Nort/East
-    pt3 SW = {0.0, 0.0, 0.0};  // South/West
-
-    NE.y = centerLat + rangeDeg;
-    SW.y = centerLat - rangeDeg;
-    NE.x = SW.x = centerLon;
-
-#ifdef S52_USE_PROJ
-    if (FALSE == S57_geo2prj3dv(1, (double*)&NE))
-        return FALSE;
-    if (FALSE == S57_geo2prj3dv(1, (double*)&SW))
-        return FALSE;
-#endif
-
-    {
-        // get drawing area in pixel
-        // assume round pixel for now
-        int w = _vp[2];  // width  (pixels)
-        int h = _vp[3];  // hieght (pixels)
-        // screen ratio
-        double r = (double)h / (double)w;   // > 1 'h' dominant, < 1 'w' dominant
-        //PRINTF("Viewport pixels (width x height): %i %i (r=%f)\n", w, h, r);
-        double dy = NE.y - SW.y;
-        // assume h dominant (latitude), so range
-        // fit on a landscape screen in latitude
-        // FIXME: in portrait screen logitude is dominant
-        // check if the ratio is the same on Xoom.
-        double dx = dy / r;
-
-        NE.x += (dx / 2.0);
-        SW.x -= (dx / 2.0);
-    }
-
-    _pmin.u = SW.x;  // left
-    _pmin.v = SW.y;  // bottom
-    _pmax.u = NE.x;  // right
-    _pmax.v = NE.y;  // top
-    //PRINTF("PROJ MIN: %f %f  MAX: %f %f\n", _pmin.u, _pmin.v, _pmax.u, _pmax.v);
-
-    // use to cull object base on there extent and view in deg
-    _gmin.u = SW.x;
-    _gmin.v = SW.y;
-    _gmin   = S57_prj2geo(_gmin);
-
-    _gmax.u = NE.x;
-    _gmax.v = NE.y;
-    _gmax   = S57_prj2geo(_gmax);
-
-    // MPP - Meter Per Pixel
-    _scalex = (_pmax.u - _pmin.u) / (double)_vp[2];
-    _scaley = (_pmax.v - _pmin.v) / (double)_vp[3];
 
     return TRUE;
 }
@@ -5515,15 +5485,27 @@ int        S52_GL_begin(S52_GL_cycle cycle)
     // GL sanity check before start of init
     _checkError("S52_GL_begin() -0-");
 
-    if (S52_GL_NONE != _crnt_GL_cycle) {
+    // Projection set in the DRAW cycle - hence need to be first
+    // so that other calls depend on projection
+    if (S52_GL_INIT==_crnt_GL_cycle && S52_GL_DRAW!=cycle) {
+        PRINTF("WARNING: very fist GL_begin must start a DRAW\n");
+        g_assert(0);
+        return FALSE;
+    }
+
+    //*
+    if (S52_GL_INIT!=_crnt_GL_cycle && S52_GL_NONE!=_crnt_GL_cycle) {
         PRINTF("WARNING: S52_GL_cycle out of sync\n");
         g_assert(0);
+        return FALSE;
     }
+    //*/
+
     _crnt_GL_cycle = cycle;
 
     // optimisation
-    _identity_MODELVIEW = FALSE;
-    _identity_MODELVIEW_cnt = 0;
+    //_identity_MODELVIEW = FALSE;
+    //_identity_MODELVIEW_cnt = 0;
 
     S52_GL_init();
 
@@ -5595,7 +5577,10 @@ int        S52_GL_begin(S52_GL_cycle cycle)
         //glDisable(GL_LINE_SMOOTH);     // NOT in GLES2
         //glDisable(GL_POLYGON_SMOOTH);  // NOT in "OpenGL ES SC"
         glDisable(GL_BLEND);
-        //glDisable(GL_DITHER);          // NOT in "OpenGL ES SC"
+
+        // 2014OCT14 - optimisation no color ditherring
+        glDisable(GL_DITHER);          // NOT in "OpenGL ES SC"
+
         //glDisable(GL_FOG);             // NOT in "OpenGL ES SC", NOT in GLES2
         //glDisable(GL_LIGHTING);        // NOT in GLES2
         //glDisable(GL_TEXTURE_1D);      // NOT in "OpenGL ES SC"
@@ -5606,7 +5591,7 @@ int        S52_GL_begin(S52_GL_cycle cycle)
         //glShadeModel(GL_FLAT);         // NOT in GLES2
 
     } else {
-        if (TRUE == S52_MP_get(S52_MAR_ANTIALIAS)) {
+        if (TRUE == (int) S52_MP_get(S52_MAR_ANTIALIAS)) {
             glEnable(GL_BLEND);
 
 #ifdef S52_USE_GL1
@@ -5660,7 +5645,7 @@ int        S52_GL_begin(S52_GL_cycle cycle)
 #if !defined(S52_USE_MESA3D) && defined(S52_USE_AFGLOW)
     // GL_POINT_SPRITE 0x8861 define only in Mesa3d GL/glext.h also in android tool chain GLES/gl.h
     // but GLSL ES 3.0 say that GL_POINT_SPRITE/gl_PointCoord work
-#define GL_POINT_SPRITE 0x8861  
+#define GL_POINT_SPRITE 0x8861
     //glEnable(GL_POINT_SPRITE);               // Adreno GLSL ES 3.0 say invalid (libGLESv3, libGLESv1_CM)
 #define GL_VERTEX_PROGRAM_POINT_SIZE 0x8642
     //glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);  // Adreno GLSL ES 3.0 say invalid
@@ -5687,35 +5672,13 @@ int        S52_GL_begin(S52_GL_cycle cycle)
 
 
 
-    // -------------------- F I X M E (cleanup this mess) --------
-    // FIX: check if this can be done when realize() is called
-    //
-    // now that the main loop and projection are up ..
-    //
-
-    // check if an initial call S52_GL_setViewPort()
-    //if (0.0==_vp[0] && 0.0==_vp[1] && 0.0==_vp[2] && 0.0==_vp[3]) {
-    if (0==_vp[0] && 0==_vp[1] && 0==_vp[2] && 0==_vp[3]) {
-
-        // a viewport cant only have positive, but GL ask for int
-        glGetIntegerv(GL_VIEWPORT, (GLint*)_vp);
-        PRINTF("WARNING: Viewport default to (%i,%i,%i,%i)\n",
-               _vp[0], _vp[1], _vp[2], _vp[3]);
-    }
-
-    glViewport(_vp[0], _vp[1], _vp[2], _vp[3]);
-
-    // set projection
-    // FIXME: check if viewing nowhere (occur at init time)
-    //if (INFINITY==_pmin.u || INFINITY==_pmin.v || -INFINITY==_pmax.u || -INFINITY==_pmax.v) {
-    //    PRINTF("ERROR: view extent not set\n");
-    //    return FALSE;
-    //}
+    // -------set matrix param ---------
+    glViewport(_vp.x, _vp.y, _vp.w, _vp.h);
 
     // do projection if draw() since the view is the same for all other mode
     if (S52_GL_DRAW == _crnt_GL_cycle) {
         // this will setup _pmin/_pmax, need a valide _vp
-        _doProjection(_centerLat, _centerLon, _rangeNM/60.0);
+        _doProjection(_vp, _centerLat, _centerLon, _rangeNM/60.0);
     }
 
     // then create all PLib symbol
@@ -5723,21 +5686,22 @@ int        S52_GL_begin(S52_GL_cycle cycle)
 
     // _createSymb() might reset line width
     // FIXME: linewidth sould be set *before* rendering any line
-    glLineWidth(1.0);
+    //glLineWidth(1.0);
 
     // -------------------------------------------------------
 
 
     _SCAMIN = _computeSCAMIN() * 10000.0;
 
-    if (_fb_pixels_size < (_vp[2] * _vp[3] * _fb_format) ) {
-        PRINTF("ERROR: pixels buffer overflow: fb_pixels_size=%i, VP=%i \n", _fb_pixels_size, (_vp[2] * _vp[3] * _fb_format));
+    if (_fb_pixels_size < (_vp.w * _vp.h * _fb_format) ) {
+        PRINTF("ERROR: pixels buffer overflow: fb_pixels_size=%i, VP=%i \n", _fb_pixels_size, (_vp.w * _vp.h * _fb_format));
         // NOTE: since the assert() is removed in the release, draw last can
         // still be called (but does notting) if _fb_pixels is NULL
         g_free(_fb_pixels);
         _fb_pixels = NULL;
 
         g_assert(0);
+        return FALSE;
     }
 
     _glMatrixSet(VP_PRJ);
@@ -5750,6 +5714,8 @@ int        S52_GL_begin(S52_GL_cycle cycle)
     // GL1 read in matrix from GPU
     glGetDoublev(GL_MODELVIEW_MATRIX,  _mvm);
     glGetDoublev(GL_PROJECTION_MATRIX, _pjm);
+    // draw to back buffer then swap
+    glDrawBuffer(GL_BACK);
 #endif
 
 
@@ -5780,7 +5746,13 @@ int        S52_GL_begin(S52_GL_cycle cycle)
             // user can draw on top of base
             // then call drawLast repeatdly
             if (TRUE == _fb_update) {
+#ifdef S52_USE_GL2
                 S52_GL_readFBPixels();
+#else
+                glDrawBuffer(GL_FRONT); // GL1
+                S52_GL_readFBPixels();
+                glDrawBuffer(GL_BACK);  // GL1
+#endif
                 _fb_update = FALSE;
             }
 
@@ -5807,9 +5779,16 @@ int        S52_GL_end(S52_GL_cycle cycle)
     if (cycle != _crnt_GL_cycle) {
         PRINTF("WARNING: S52_GL_mode out of sync\n");
         g_assert(0);
+        return FALSE;
     }
     _crnt_GL_cycle = cycle;
 
+    // read once, top object
+    if (S52_GL_PICK==_crnt_GL_cycle && 1.0==S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+        //glReadPixels(_vp[0], _vp[1], 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
+        glReadPixels(_vp.x, _vp.y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &_pixelsRead);
+        _checkError("S52_GL_end():glReadPixels()");
+    }
 
 #ifdef S52_USE_GL1
     glDisableClientState(GL_VERTEX_ARRAY);
@@ -5872,8 +5851,9 @@ int        S52_GL_end(S52_GL_cycle cycle)
     return TRUE;
 }
 
-int        S52_GL_del(S52_obj *obj)
-// delete geo Display List associate to an object
+int        S52_GL_delDL(S52_obj *obj)
+// delete the GL part of S57 geo object (Display List)
+// S52_obj is use only by FREETYPE_GL
 {
     S57_geo  *geoData = S52_PL_getGeo(obj);
     S57_prim *prim    = S57_getPrimGeo(geoData);
@@ -5897,27 +5877,29 @@ int        S52_GL_del(S52_obj *obj)
         // delete VBO when program terminated
         if (GL_TRUE == glIsBuffer(vboID)) {
             glDeleteBuffers(1, &vboID);
+            vboID = 0;
+            S57_setPrimDList(prim, vboID);
         }else {
-            PRINTF("WARNING: ivalid VBO\n");
+            PRINTF("WARNING: ivalid PrimData VBO\n");
             g_assert(0);
+            return FALSE;
         }
 
-        vboID = 0;
-        S57_setPrimDList(prim, vboID);
-
 #ifdef S52_USE_FREETYPE_GL
-        {   // delete text
+        {   // delete text if any
             guint len;
             guint vboID = S52_PL_getFreetypeGL_VBO(obj, &len);
-            if (GL_TRUE == glIsBuffer(vboID))
+            if (GL_TRUE == glIsBuffer(vboID)) {
                 glDeleteBuffers(1, &vboID);
-            else {
-                PRINTF("WARNING: ivalid FrretypeGL VBO\n");
-                g_assert(0);
+
+                len   = 0;
+                vboID = 0;
+                S52_PL_setFreetypeGL_VBO(obj, vboID, len);
             }
-            len   = 0;
-            vboID = 0;
-            S52_PL_setFreetypeGL_VBO(obj, vboID, len);
+            //else {
+            //        PRINTF("WARNING: ivalid FreetypeGL VBOID(%i)\n", vboID);
+            //g_assert(0);
+            //    }
         }
 #endif
 
@@ -5925,16 +5907,17 @@ int        S52_GL_del(S52_obj *obj)
         // 'vboID' is in fact a DList here
         if (GL_TRUE == glIsList(vboID)) {
             glDeleteLists(vboID, 1);
+            vboID = 0;
+            S57_setPrimDList(prim, vboID);
         } else {
             PRINTF("WARNING: ivalid DL\n");
             g_assert(0);
+            return FALSE;
         }
-        vboID = 0;
-        S57_setPrimDList(prim, vboID);
 #endif  // S52_USE_OPENGL_VBO
     }
 
-    _checkError("S52_GL_del()");
+    _checkError("S52_GL_delDL()");
 
     return TRUE;
 }
@@ -5992,22 +5975,20 @@ static int       _contextValid(void)
 #endif
 
     {
-        const GLubyte *vendor     = glGetString(GL_VENDOR);
-        const GLubyte *renderer   = glGetString(GL_RENDERER);
-        const GLubyte *version    = glGetString(GL_VERSION);
-        const GLubyte *slglver    = glGetString(GL_SHADING_LANGUAGE_VERSION);
         const GLubyte *extensions = glGetString(GL_EXTENSIONS);
-        if (NULL == extensions) {
-            PRINTF("ERROR: glGetString(GL_EXTENSIONS) is NULL\n");
-            //g_assert(0);
-            return FALSE;
+#ifdef S52_DEBUG
+        {
+            const GLubyte *vendor     = glGetString(GL_VENDOR);
+            const GLubyte *renderer   = glGetString(GL_RENDERER);
+            const GLubyte *version    = glGetString(GL_VERSION);
+            const GLubyte *slglver    = glGetString(GL_SHADING_LANGUAGE_VERSION);
+            PRINTF("Vendor:     %s\n", vendor);
+            PRINTF("Renderer:   %s\n", renderer);
+            PRINTF("Version:    %s\n", version);
+            PRINTF("Shader:     %s\n", slglver);
+            PRINTF("Extensions: %s\n", extensions);
         }
-
-        PRINTF("Vendor:     %s\n", vendor);
-        PRINTF("Renderer:   %s\n", renderer);
-        PRINTF("Version:    %s\n", version);
-        PRINTF("Shader:     %s\n", slglver);
-        PRINTF("Extensions: %s\n", extensions);
+#endif
 
         // npot
         if (NULL != g_strrstr((const char *)extensions, "GL_OES_texture_npot")) {
@@ -6037,7 +6018,7 @@ static int       _contextValid(void)
         }
     }
 
-#if !defined(S52_USE_GLES2)
+#if !defined(S52_USE_GL2)
     GLboolean d = FALSE;
     glGetBooleanv(GL_DOUBLEBUFFER, &d);
     PRINTF("DEBUG: double buffer: %s\n", ((TRUE==d) ? "TRUE" : "FALSE"));
@@ -6063,6 +6044,7 @@ int        S52_GL_init(void)
     if (sizeof(double) != sizeof(GLdouble)) {
         PRINTF("ERROR: sizeof(double) != sizeof(GLdouble)\n");
         g_assert(0);
+        return FALSE;
     }
 
     // GL sanity check before start of init
@@ -6092,9 +6074,6 @@ int        S52_GL_init(void)
     if (NULL == _objPick)
         _objPick = g_ptr_array_new();
 
-    // signal to (re)build S52 symbol
-    //_symbCreated = FALSE;
-
     //_DEBUG = TRUE;
 
     // tmp buffer
@@ -6111,27 +6090,27 @@ int        S52_GL_init(void)
 #endif
 
     // init vbo for color
-    if (0 == _vboIDaftglwColrID)
+    if (0 == _vboIDaftglwColrID) {
         glGenBuffers(1, &_vboIDaftglwColrID);
 
-    // FIXME: glIsBuffer() faild but _vboIDaftglwColrID is valid
-    //if (GL_FALSE == glIsBuffer(_vboIDaftglwColrID)) {
-    if (0 == _vboIDaftglwColrID) {
-        PRINTF("ERROR: glGenBuffers() fail\n");
-        g_assert(0);
-        return FALSE;
+        // glIsBuffer() faild but _vboIDaftglwColrID is valid
+        if (0 == _vboIDaftglwColrID) {
+            PRINTF("ERROR: glGenBuffers() fail\n");
+            g_assert(0);
+            return FALSE;
+        }
     }
 
     // init VBO for vertex
-    if (0 == _vboIDaftglwVertID)
+    if (0 == _vboIDaftglwVertID) {
         glGenBuffers(1, &_vboIDaftglwVertID);
 
-    // FIXME: glIsBuffer() faild but _vboIDaftglwVertID is valid
-    //if (GL_FALSE == glIsBuffer(_vboIDaftglwVertID)) {
-    if (0 == _vboIDaftglwVertID) {
-        PRINTF("ERROR: glGenBuffers() fail\n");
-        g_assert(0);
-        return FALSE;
+        // glIsBuffer() faild but _vboIDaftglwVertID is valid
+        if (0 == _vboIDaftglwVertID) {
+            PRINTF("ERROR: glGenBuffers() fail\n");
+            g_assert(0);
+            return FALSE;
+        }
     }
 #endif
 
@@ -6142,7 +6121,8 @@ int        S52_GL_init(void)
 
 int        S52_GL_done(void)
 {
-    if (_doInit) return _doInit;
+    if (TRUE == _doInit)
+        return FALSE;
 
     _freeGLU();
 
@@ -6282,7 +6262,7 @@ int        S52_GL_setPRJView(double  s, double  w, double  n, double  e)
 int        S52_GL_getPRJView(double *LLv, double *LLu, double *URv, double *URu)
 {
     if (_doInit) {
-        PRINTF("ERROR: S52 GL not initialize\n");
+        PRINTF("WARNING: S52 GL not initialize\n");
         return FALSE;
     }
 
@@ -6307,7 +6287,7 @@ int        S52_GL_setGEOView(double  s, double  w, double  n, double  e)
 int        S52_GL_getGEOView(double *LLv, double *LLu, double *URv, double *URu)
 {
     if (_doInit) {
-        PRINTF("ERROR: S52 GL not initialize\n");
+        PRINTF("WARNING: S52 GL not initialize\n");
         return FALSE;
     }
 
@@ -6340,13 +6320,20 @@ int        S52_GL_setViewPort(int x, int y, int width, int height)
     //PRINTF("VP: %i, %i, %i, %i\n", _vp[0], _vp[1], _vp[2], _vp[3]);
     //_checkError("S52_GL_setViewPort()");
 
-    _vp[0] = x;
-    _vp[1] = y;
-    _vp[2] = width;
-    _vp[3] = height;
+    //_vp[0] = x;
+    //_vp[1] = y;
+    //_vp[2] = width;
+    //_vp[3] = height;
+    _vp.x = x;
+    _vp.y = y;
+    _vp.w = width;
+    _vp.h = height;
+    guint sz = width * height * _fb_format;
 
-    if (_fb_pixels_size < (_vp[2] * _vp[3] * _fb_format) ) {
-        _fb_pixels_size =  _vp[2] * _vp[3] * _fb_format;
+    //if (_fb_pixels_size < (_vp[2] * _vp[3] * _fb_format) ) {
+    //    _fb_pixels_size =  _vp[2] * _vp[3] * _fb_format;
+    if (_fb_pixels_size < sz) {
+        _fb_pixels_size = sz;
         _fb_pixels      = g_renew(unsigned char, _fb_pixels, _fb_pixels_size);
         PRINTF("pixels buffer resized (%i)\n", _fb_pixels_size);
     }
@@ -6359,10 +6346,14 @@ int        S52_GL_getViewPort(int *x, int *y, int *width, int *height)
     //glGetIntegerv(GL_VIEWPORT, _vp);
     //_checkError("S52_GL_getViewPort()");
 
-    *x      = _vp[0];
-    *y      = _vp[1];
-    *width  = _vp[2];
-    *height = _vp[3];
+    //*x      = _vp[0];
+    //*y      = _vp[1];
+    //*width  = _vp[2];
+    //*height = _vp[3];
+    *x      = _vp.x;
+    *y      = _vp.y;
+    *width  = _vp.w;
+    *height = _vp.w;
 
     return TRUE;
 }
@@ -6371,6 +6362,12 @@ int        S52_GL_getViewPort(int *x, int *y, int *width, int *height)
 const
 char      *S52_GL_getNameObjPick(void)
 {
+    if (S52_GL_NONE != _crnt_GL_cycle) {
+        PRINTF("ERROR: inside a GL cycle\n");
+        g_assert(0);
+        return NULL;
+    }
+
     if (0 == _objPick->len) {
         PRINTF("WARNING: no S57 object found\n");
         return NULL;
@@ -6379,121 +6376,145 @@ char      *S52_GL_getNameObjPick(void)
     if (NULL == _strPick)
         _strPick = g_string_new("");
 
-    const    char *name  = NULL;
-    unsigned int   S57ID = 0;
+    const char *name = NULL;
+    guint S57ID = 0;
+    guint idx   = 0;
 
-    PRINTF("----------- PICK(%i) ---------------\n", _objPick->len);
+    if (1.0 == S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+        idx = _pixelsRead[0].color.r;
 
-    for (guint i=0; i<_objPick->len; ++i) {
-        S52_obj *obj = (S52_obj*)g_ptr_array_index(_objPick, i);
-        S57_geo *geo = S52_PL_getGeo(obj);
+        // pick anything
+        if (0 != idx)
+            --idx;
+    }
 
-        name  = S57_getName(geo);
-        S57ID = S57_getGeoID(geo);
+    //if (2.0 == S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+    if (2.0==S52_MP_get(S52_MAR_DISP_CRSR_PICK) || 3.0==S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
 
-        PRINTF("%i  : %s\n", i, name);
-        PRINTF("LUP : %s\n", S52_PL_getCMDstr(obj));
-        PRINTF("DPRI: %i\n", (int)S52_PL_getDPRI(obj));
+        PRINTF("----------- PICK(%i) ---------------\n", _objPick->len);
 
-        { // pull PLib exposition field: LXPO/PXPO/SXPO
-            int nCmd = 0;
-            S52_CmdWrd cmdWrd = S52_PL_iniCmd(obj);
-            while (S52_CMD_NONE != cmdWrd) {
-                const char *cmdType = NULL;
-                switch (cmdWrd) {
+        for (guint i=0; i<_objPick->len; ++i) {
+            S52_obj *obj = (S52_obj*)g_ptr_array_index(_objPick, i);
+            S57_geo *geo = S52_PL_getGeo(obj);
+
+            name  = S57_getName(geo);
+            S57ID = S57_getGeoID(geo);
+
+            PRINTF("%i  : %s\n", i, name);
+            PRINTF("LUP : %s\n", S52_PL_getCMDstr(obj));
+            PRINTF("DPRI: %i\n", (int)S52_PL_getDPRI(obj));
+
+            { // pull PLib exposition field: LXPO/PXPO/SXPO
+                int nCmd = 0;
+                S52_CmdWrd cmdWrd = S52_PL_iniCmd(obj);
+                while (S52_CMD_NONE != cmdWrd) {
+                    const char *cmdType = NULL;
+
+                    switch (cmdWrd) {
                     case S52_CMD_SYM_PT: cmdType = "SXPO"; break;   // SY
                     case S52_CMD_COM_LN: cmdType = "LXPO"; break;   // LC
-                	case S52_CMD_ARE_PA: cmdType = "PXPO"; break;   // AP
+                    case S52_CMD_ARE_PA: cmdType = "PXPO"; break;   // AP
 
-                	default: break;
+                    default: break;
+                    }
+
+                    //*
+                    if (NULL != cmdType) {
+                        char  name[80];
+                        const char *value = S52_PL_getCmdText(obj);
+                        // debug
+                        //PRINTF("%s%i: %s\n", cmdType, nCmd, value);
+
+                        if (NULL !=  value) {
+                            // insert in Att
+                            SNPRINTF(name, 80, "%s%i", cmdType, nCmd);
+                            S57_setAtt(geo, name, value);
+                        }
+                    }
+                    //*/
+
+                    cmdWrd = S52_PL_getCmdNext(obj);
+                    ++nCmd;
                 }
-
-                //*
-                if (NULL != cmdType) {
-                    char  name[80];
-                    const char *value = S52_PL_getCmdText(obj);
-
-                    // debug
-                    PRINTF("%s%i: %s\n", cmdType, nCmd, value);
-
-                    // insert in Att
-                    SPRINTF(name, "%s%i", cmdType, nCmd);
-                    S57_setAtt(geo, name, value);
-                    cmdType = NULL;
-                }
-                //*/
-
-                cmdWrd = S52_PL_getCmdNext(obj);
-                ++nCmd;
             }
+
+            S57_dumpData(geo, FALSE);
+            PRINTF("-----------\n");
         }
 
-        S57_dumpData(geo, FALSE);
-        PRINTF("-----------\n");
+        // pick anything
+        if (0 != _objPick->len)
+            idx = _objPick->len-1;
+
     }
 
-    //SPRINTF(_strPick, "%s:%i", name, S57ID);
-    g_string_printf(_strPick, "%s:%i", name, S57ID);
-
-    //*
     // hightlight object at the top of the stack
-    S52_obj *objhighlight = (S52_obj *)g_ptr_array_index(_objPick, _objPick->len-1);
+    if (0==_objPick->len || _objPick->len<=idx) {
+        return NULL;
+    }
 
-    S57_geo *geo  = S52_PL_getGeo(objhighlight);
-    S57_highlightON(geo);
+    S52_obj *objHighLight = (S52_obj *)g_ptr_array_index(_objPick, idx);
+    S57_geo *geoHighLight = S52_PL_getGeo(objHighLight);
+    S57_highlightON(geoHighLight);
 
+    name  = S57_getName (geoHighLight);
+    S57ID = S57_getGeoID(geoHighLight);
+
+    // Note: compile with S52_USE_C_AGGR_C_ASSO
 #ifdef S52_USE_C_AGGR_C_ASSO
-    // debug
-    GString *geo_refs = S57_getAttVal(geo, "_LNAM_REFS_GEO");
-    if (NULL != geo_refs)
-        PRINTF("DEBUG:geo:_LNAM_REFS_GEO = %s\n", geo_refs->str);
+    if (3.0 == S52_MP_get(S52_MAR_DISP_CRSR_PICK)) {
+        // debug
+        GString *geo_refs = S57_getAttVal(geoHighLight, "_LNAM_REFS_GEO");
+        if (NULL != geo_refs)
+            PRINTF("DEBUG:geo:_LNAM_REFS_GEO = %s\n", geo_refs->str);
 
-    // get relationship obj
-    S57_geo *geoRel = S57_getRelationship(geo);
-    if (NULL != geoRel) {
-        GString *geoRelIDs   = NULL;
-        GString *geoRel_refs = S57_getAttVal(geoRel, "_LNAM_REFS_GEO");
-        if (NULL != geoRel_refs)
-            PRINTF("DEBUG:geoRel:_LNAM_REFS_GEO = %s\n", geoRel_refs->str);
+        // get relationship obj
+        S57_geo *geoRel = S57_getRelationship(geoHighLight);
+        if (NULL != geoRel) {
+            GString *geoRelIDs   = NULL;
+            GString *geoRel_refs = S57_getAttVal(geoRel, "_LNAM_REFS_GEO");
+            if (NULL != geoRel_refs)
+                PRINTF("DEBUG:geoRel:_LNAM_REFS_GEO = %s\n", geoRel_refs->str);
 
-        // parse Refs
-        gchar  **splitRefs = g_strsplit_set(geoRel_refs->str, ",", 0);
-        gchar  **topRefs   = splitRefs;
+            // parse Refs
+            gchar **splitRefs = g_strsplit_set(geoRel_refs->str, ",", 0);
+            gchar **topRefs   = splitRefs;
 
-        while (NULL != *splitRefs) {
-            S57_geo *geoRelAssoc = NULL;
+            while (NULL != *splitRefs) {
+                S57_geo *geoRelAssoc = NULL;
 
-            sscanf(*splitRefs, "%p", (void**)&geoRelAssoc);
-            S57_highlightON(geoRelAssoc);
+                sscanf(*splitRefs, "%p", (void**)&geoRelAssoc);
+                S57_highlightON(geoRelAssoc);
 
-            guint idAssoc = S57_getGeoID(geoRelAssoc);
+                guint idAssoc = S57_getGeoID(geoRelAssoc);
 
-            if (NULL == geoRelIDs) {
-                geoRelIDs = g_string_new("");
-                g_string_printf(geoRelIDs, ":%i,%i", S57_getGeoID(geoRel), idAssoc);
-            } else {
-                g_string_append_printf(geoRelIDs, ",%i", idAssoc);
+                if (NULL == geoRelIDs) {
+                    geoRelIDs = g_string_new("");
+                    g_string_printf(geoRelIDs, ":%i,%i", S57_getGeoID(geoRel), idAssoc);
+                } else {
+                    g_string_append_printf(geoRelIDs, ",%i", idAssoc);
+                }
+
+                splitRefs++;
             }
 
-            splitRefs++;
+            // if in a relation then append it to pick string
+            g_string_printf(_strPick, "%s:%i%s", name, S57ID, geoRelIDs->str);
+
+            g_string_free(geoRelIDs, TRUE);
+
+            g_strfreev(topRefs);
         }
-
-        // if in a relation then append it to pick string
-        //SPRINTF(_strPick, "%s:%i%s", name, S57ID, geoRelIDs->str);
-        g_string_printf(_strPick, "%s:%i%s", name, S57ID, geoRelIDs->str);
-
-        g_string_free(geoRelIDs, TRUE);
-
-        g_strfreev(topRefs);
     }
 #endif  // S52_USE_C_AGGR_C_ASSO
+
+    g_string_printf(_strPick, "%s:%i", name, S57ID);
 
     return (const char *)_strPick->str;
 }
 
 guchar    *S52_GL_readFBPixels(void)
 {
-    //if (S52_GL_PICK==_crnt_GL_cycle || NULL==_fb_pixels) {
     if (S52_GL_PICK == _crnt_GL_cycle) {
         return NULL;
     }
@@ -6501,29 +6522,36 @@ guchar    *S52_GL_readFBPixels(void)
     // debug
     //PRINTF("VP: %i, %i, %i, %i\n", _vp[0], _vp[1], _vp[2], _vp[3]);
 
-    glBindTexture(GL_TEXTURE_2D, _fb_texture_id);
 
+#ifdef S52_USE_GL2
+    glBindTexture(GL_TEXTURE_2D, _fb_texture_id);
 #ifdef S52_USE_TEGRA2
     // Note: glCopyTexImage2D flip Y on TEGRA (Xoom)
     // Note: must be in sync with _fb_format
 
     // copy FB --> MEM
     // RGBA
-    glReadPixels(_vp[0], _vp[1], _vp[2], _vp[3], GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
+    //glReadPixels(_vp[0], _vp[1], _vp[2], _vp[3], GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
+    glReadPixels(_vp.x, _vp.y, _vp.w, _vp.h, GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
     // RGB
     //glReadPixels(_vp[0], _vp[1], _vp[2], _vp[3], GL_RGB, GL_UNSIGNED_BYTE, _fb_pixels);
 
     // copy MEM --> Texture
     // RGBA
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _vp[2], _vp[3], 0, GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _vp.w, _vp.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
     // RGB
     //glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, _vp[2], _vp[3], 0, GL_RGB, GL_UNSIGNED_BYTE, _fb_pixels);
 
-#else
-    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, _vp[2], _vp[3], 0);
+#else   // S52_USE_TEGRA2
+    //glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, _vp[2], _vp[3], 0);
+    glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 0, 0, _vp.w, _vp.h, 0);
 #endif  // S52_USE_TEGRA2
 
     glBindTexture(GL_TEXTURE_2D, 0);
+
+#else   // S52_USE_GL2
+    glReadPixels(_vp.x, _vp.y, _vp.w, _vp.h, GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
+#endif  // S52_USE_GL2
 
     _checkError("S52_GL_readFBPixels().. -end-");
 
@@ -6532,7 +6560,6 @@ guchar    *S52_GL_readFBPixels(void)
 
 int        S52_GL_drawFBPixels(void)
 {
-    //if (S52_GL_PICK==_crnt_GL_cycle || NULL==_fb_pixels) {
     if (S52_GL_PICK == _crnt_GL_cycle) {
         return FALSE;
     }
@@ -6547,9 +6574,6 @@ int        S52_GL_drawFBPixels(void)
     glBindTexture(GL_TEXTURE_2D, _fb_texture_id);
 
 #ifdef S52_USE_GL2
-
-    _glMatrixSet(VP_PRJ);
-
     // turn ON 'sampler2d'
     glUniform1f(_uBlitOn, 1.0);
 
@@ -6578,8 +6602,6 @@ int        S52_GL_drawFBPixels(void)
     glDisableVertexAttribArray(_aUV);
     glDisableVertexAttribArray(_aPosition);
 
-    _glMatrixDel(VP_PRJ);
-
 #else   // S52_USE_GL2
 
     _glMatrixSet(VP_WIN);
@@ -6587,7 +6609,7 @@ int        S52_GL_drawFBPixels(void)
 
     // parameter must be in sync with glReadPixels()
     // RGBA
-    glDrawPixels(_vp[2], _vp[3], GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
+    glDrawPixels(_vp.w, _vp.h, GL_RGBA, GL_UNSIGNED_BYTE, _fb_pixels);
     // RGB
     //glDrawPixels(_vp[2], _vp[3], GL_RGB, GL_UNSIGNED_BYTE, _fb_pixels);
 
@@ -6606,7 +6628,6 @@ int        S52_GL_drawFBPixels(void)
 
 int        S52_GL_drawBlit(double scale_x, double scale_y, double scale_z, double north)
 {
-    //if (S52_GL_PICK==_crnt_GL_cycle || NULL==_fb_pixels) {
     if (S52_GL_PICK == _crnt_GL_cycle) {
         return FALSE;
     }
@@ -6620,7 +6641,7 @@ int        S52_GL_drawBlit(double scale_x, double scale_y, double scale_z, doubl
 
 #ifdef S52_USE_GL2
 
-    _glMatrixSet(VP_PRJ);
+    //_glMatrixSet(VP_PRJ);
 
     // turn ON 'sampler2d'
     glUniform1f(_uBlitOn, 1.0);
@@ -6649,7 +6670,7 @@ int        S52_GL_drawBlit(double scale_x, double scale_y, double scale_z, doubl
     glDisableVertexAttribArray(_aUV);
     glDisableVertexAttribArray(_aPosition);
 
-    _glMatrixDel(VP_PRJ);
+    //_glMatrixDel(VP_PRJ);
 
 #else
     (void)scale_x;
@@ -6684,17 +6705,23 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     guint x, y;
 
     if (NULL == obj) {
-        x      = _vp[0];
-        y      = _vp[1];
-        width  = _vp[2];
-        height = _vp[3];
+        //x      = _vp[0];
+        //y      = _vp[1];
+        //width  = _vp[2];
+        //height = _vp[3];
+        x      = _vp.x;
+        y      = _vp.y;
+        width  = _vp.w;
+        height = _vp.h;
     } else {
-        if (width > _vp[2]) {
-            PRINTF("WARNING: dump width (%i) exceeded viewport width (%i)\n", width, _vp[2]);
+        //if (width > _vp[2]) {
+        if (width > _vp.w) {
+            PRINTF("WARNING: dump width (%i) exceeded viewport width (%i)\n", width, _vp.w);
             return FALSE;
         }
-        if (height> _vp[3]) {
-            PRINTF("WARNING: dump height (%i) exceeded viewport height (%i)\n", height, _vp[3]);
+        //if (height> _vp[3]) {
+        if (height> _vp.h) {
+            PRINTF("WARNING: dump height (%i) exceeded viewport height (%i)\n", height, _vp.h);
             return FALSE;
         }
 
@@ -6710,19 +6737,27 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
         if (FALSE == S57_geo2prj3dv(1, (double*)&pt))
             return FALSE;
 
-        //_glMatrixSet(VP_WIN);
-        _glMatrixSet(VP_PRJ);
+        //_glMatrixSet(VP_PRJ);
 
-        projUV p = {pt.x, pt.y};
-        p = _prj2win(p);
-        //_glMatrixDel(VP_WIN);
-        _glMatrixDel(VP_PRJ);
+        // then MatrixSet in that order
+        //projUV p = {pt.x, pt.y};
+        // p = _prj2win(p);
+        S52_GL_prj2win(&pt.x, &pt.y);
+
+        //_glMatrixDel(VP_PRJ);
 
         // FIXME: what happen if the viewport change!!
-        if ((p.u - width/2 ) <      0) x = width/2;
-        if ((x   + width   ) > _vp[2]) x = _vp[2] - width;
-        if ((p.v - height/2) <      0) y = height/2;
-        if ((y   + height  ) > _vp[3]) y = _vp[3] - height;
+        //if ((p.u - width/2 ) <      0) x = width/2;
+        //if ((x   + width   ) > _vp[2]) x = _vp[2] - width;
+        //if ((p.v - height/2) <      0) y = height/2;
+        //if ((y   + height  ) > _vp[3]) y = _vp[3] - height;
+
+        if ((pt.x - width/2 ) <      0) x = width/2;
+        //if ((x    + width   ) > _vp[2]) x = _vp[2] - width;
+        if ((x    + width   ) > _vp.w) x = _vp.w - width;
+        if ((pt.y - height/2) <      0) y = height/2;
+        //if ((y    + height  ) > _vp.h) y = _vp[3] - height;
+        if ((y    + height  ) > _vp.h) y = _vp.h - height;
     }
 
     driver = GDALGetDriverByName("GTiff");
@@ -6741,8 +6776,13 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     //if( CSLFetchBoolean( papszMetadata, GDAL_DCAP_CREATE, FALSE ) )
     */
 
+#ifdef S52_USE_ANDROID
+    char *tmpTif = "/sdcard/s52droid/_tmp.tif";
+#else
+    char *tmpTif = "_tmp.tif";
+#endif
 
-    dataset = GDALCreate(driver, "/sdcard/s52droid/_temp.tif", width, height, 3, GDT_Byte, NULL);
+    dataset = GDALCreate(driver, tmpTif, width, height, 3, GDT_Byte, NULL);
     if (NULL == dataset) {
         PRINTF("WARNING: fail to create GDAL data set\n");
         return FALSE;
@@ -6752,12 +6792,12 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     GDALRasterBandH bandB = GDALGetRasterBand(dataset, 3);
 
     // get framebuffer pixels
-    //guint8 *pixels = g_new0(guint8, width * height * 3); // RGB
-    guint8 *pixels = g_new0(guint8, width * height * 4);  // RGBA
+    guint8 *pixels = g_new0(guint8, width * height * _fb_format);
 
 #ifdef S52_USE_GL2
-    //glReadPixels(x, y, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
-    glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    // FIXME: arm adreno will break here
+    glReadPixels(x, y, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    //glReadPixels(x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 #else
     glReadBuffer(GL_FRONT);
     glReadPixels(x, y, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
@@ -6767,7 +6807,6 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     _checkError("S52_GL_dumpS57IDPixels()");
 
     //FIXME: use something like glPixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
-
     {   // flip vertically
         guint8 *flipbuf = g_new0(guint8, width * height * 3);
         for (guint i=0; i<height; ++i) {
@@ -6787,10 +6826,9 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     GDALClose(dataset);
     g_free(pixels);
 
-    //gdal.GetDriverByName('PNG').CreateCopy(self.file.get_text(), gdal.Open('_temp.tif'),TRUE)
     GDALDatasetH dst_dataset;
     driver      = GDALGetDriverByName("PNG");
-    dst_dataset = GDALCreateCopy(driver, toFilename, GDALOpen("/sdcard/s52droid/_temp.tif", GA_ReadOnly), FALSE, NULL, NULL, NULL);
+    dst_dataset = GDALCreateCopy(driver, toFilename, GDALOpen(tmpTif, GA_ReadOnly), FALSE, NULL, NULL, NULL);
     GDALClose(dst_dataset);
 
     return TRUE;
@@ -6855,6 +6893,8 @@ int        S52_GL_getStrOffset(double *offset_x, double *offset_y, const char *s
 int        S52_GL_drawGraticule(void)
 // FIXME: use S52_MAR_DISP_GRATICULE to get the user choice
 {
+    return_if_null(S57_getPrjStr());
+
     // delta lat  / 1852 = height in NM
     // delta long / 1852 = witdh  in NM
     double dlat = (_pmax.v - _pmin.v) / 3.0;
@@ -6884,7 +6924,7 @@ int        S52_GL_drawGraticule(void)
         projXY uv   = {lon, lat};
 
         uv = S57_prj2geo(uv);
-        SPRINTF(str, "%07.4f deg %c", fabs(uv.v), (0.0<lat)?'N':'S');
+        SNPRINTF(str, 80, "%07.4f deg %c", fabs(uv.v), (0.0<lat)?'N':'S');
         //_renderTXTAA(lon, lat, 1, 1, str);
 
         _DrawArrays_LINE_STRIP(2, (vertex_t *)ppt);
@@ -6897,7 +6937,7 @@ int        S52_GL_drawGraticule(void)
         pt3v ppt[2] = {{lon, lat, 0.0}, {_pmax.u, lat, 0.0}};
         projXY uv   = {lon, lat};
         uv = S57_prj2geo(uv);
-        SPRINTF(str, "%07.4f deg %c", fabs(uv.v), (0.0<lat)?'N':'S');
+        SNPRINTF(str, 80, "%07.4f deg %c", fabs(uv.v), (0.0<lat)?'N':'S');
 
         _DrawArrays_LINE_STRIP(2, (vertex_t *)ppt);
         //_renderTXTAA(lon, lat, 1, 1, str);
@@ -6911,7 +6951,7 @@ int        S52_GL_drawGraticule(void)
         pt3v ppt[2] = {{lon, lat, 0.0}, {lon, _pmax.v, 0.0}};
         projXY uv   = {lon, lat};
         uv = S57_prj2geo(uv);
-        SPRINTF(str, "%07.4f deg %c", fabs(uv.u), (0.0<lon)?'E':'W');
+        SNPRINTF(str, 80, "%07.4f deg %c", fabs(uv.u), (0.0<lon)?'E':'W');
 
         _DrawArrays_LINE_STRIP(2, (vertex_t *)ppt);
         //_renderTXTAA(lon, lat, 1, 1, str);
@@ -6924,7 +6964,7 @@ int        S52_GL_drawGraticule(void)
         pt3v ppt[2] = {{lon, lat, 0.0}, {lon, _pmax.v, 0.0}};
         projXY uv   = {lon, lat};
         uv = S57_prj2geo(uv);
-        SPRINTF(str, "%07.4f deg %c", fabs(uv.u), (0.0<lon)?'E':'W');
+        SNPRINTF(str, 80, "%07.4f deg %c", fabs(uv.u), (0.0<lon)?'E':'W');
 
         _DrawArrays_LINE_STRIP(2, (vertex_t *)ppt);
         //_renderTXTAA(lon, lat, 1, 1, str);
@@ -7042,11 +7082,8 @@ int              _drawArc(S52_obj *objA, S52_obj *objB)
     //
     //_setBlend(TRUE);
 
-    S52_DListData *DListData = S52_PL_getDListData(objA);
-    //if ((NULL==DListData) || (FALSE==_VBOvalidate(DListData)))
-    //    return FALSE;
-
-    S52_Color *color = DListData->colors;
+    S52_DList *DListData = S52_PL_getDListData(objA);
+    S52_Color *color     = DListData->colors;
     _glColor4ub(color);
 
 
@@ -7054,8 +7091,7 @@ int              _drawArc(S52_obj *objA, S52_obj *objB)
     if (2.0==S52_MP_get(S52_MAR_DISP_WHOLIN) || 3.0==S52_MP_get(S52_MAR_DISP_WHOLIN)) {
         //nSym  /= 2;
         for (int j=0; j<=nSym; ++j) {
-            _glMatrixMode(GL_MODELVIEW);
-            _glLoadIdentity();
+            _glLoadIdentity(GL_MODELVIEW);
 
             _glTranslated(xx, yy, 0.0);
 
@@ -7103,6 +7139,89 @@ int        S52_GL_drawArc(S52_obj *objA, S52_obj *objB)
     _checkError("S52_GL_drawArc()");
 
     return TRUE;
+}
+
+#if 0
+int              _intersect(double x1, double y1, double x2, double y2,
+                            double x3, double y3, double x4, double y4)
+// TRUE if line segment intersect, else FALSE
+// inspire from GEM III
+{
+    double Ax = x2-x1;
+    double Bx = x3-x4;
+
+    double Ay = y2-y1;
+    double By = y3-y4;
+
+    double Cx = x1-x3;
+    double Cy = y1-y3;
+
+    // alpha numerator
+    double d  = By*Cx - Bx*Cy;
+    // both denominator
+    double f  = Ay*Bx - Ax*By;
+
+    //é alpha tets
+    if (f > 0) {
+        if (d<0 || d>f)
+            return FALSE;
+    } else {
+        if (d>0 || d<f)
+            return FALSE;
+    }
+
+    // beta numerator
+    double e = Ax*Cy - Ay*Cx;
+
+    // beta tests
+    if (f > 0) {
+        if (e<0 || e>f)
+            return FALSE;
+    } else {
+        if (e>0 || e<f)
+            return FALSE;
+    }
+
+    return TRUE;
+}
+#endif
+
+int        S52_GL_isHazard(int nxyz, double *xyz)
+// TRUE if hazard found
+{
+    // Port
+    //_intersect(x1, y1, x2, y2, x3, y3, x4, y4);
+    // Starboard
+    //_intersect(x1, y1, x2, y2, x3, y3, x4, y4);
+
+#ifdef S52_USE_GL2
+    _d2f(_tessWorkBuf_f, nxyz, xyz);
+    memcpy(_hazardZone, _tessWorkBuf_f->data, sizeof(vertex_t) * nxyz * 3);
+#else
+    memcpy(_hazardZone, xyz, sizeof(vertex_t) * nxyz * 3);
+#endif
+
+    // highlight Hazard
+    int found = FALSE;
+    for (guint i=0; i<_objPick->len; ++i) {
+        S52_obj  *obj = (S52_obj *)g_ptr_array_index(_objPick, i);
+        S57_geo  *geo = S52_PL_getGeo(obj);
+
+        GLdouble *ppt = NULL;
+        guint     npt = 0;
+        if (FALSE == S57_getGeoData(geo, 0, &npt, &ppt))
+            continue;
+
+        for (guint j=0; j<npt; ++j) {
+            if (TRUE == S57_isPtInside(nxyz, xyz, TRUE, ppt[j*3 + 0], ppt[j*3 + 1])) {
+                S57_highlightON(geo);
+                found = TRUE;
+                break;
+            }
+        }
+    }
+
+    return found;
 }
 
 

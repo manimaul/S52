@@ -100,7 +100,6 @@ static int                 _handleS52method(const gchar *str, char *result, char
     //
 
     //S52ObjectHandle STD S52_newOWNSHP(const char *label);
-    //if (0 == S52_strncmp(cmdName, "S52_newOWNSHP", strlen("S52_newOWNSHP"))) {
     if (0 == g_strcmp0(cmdName, "S52_newOWNSHP")) {
         const char *label = json_array_get_string (paramsArr, 0);
         if ((NULL==label) || (1!=count)) {
@@ -109,7 +108,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
         }
 
         S52ObjectHandle objH = S52_newOWNSHP(label);
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -129,7 +129,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
         }
 
         S52ObjectHandle objH = S52_newVESSEL(vesrce, label);
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
         //PRINTF("objH: %lu\n", objH);
 
         goto exit;
@@ -151,7 +152,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
         long unsigned int lui = (long unsigned int) json_array_get_number(paramsArr, 0);
         S52ObjectHandle objH  = (S52ObjectHandle) lui;
         objH = S52_setVESSELlabel(objH, label);
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -171,7 +173,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
 
         objH = S52_pushPosition(objH, latitude, longitude, data);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -191,7 +194,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
 
         objH = S52_setVector(objH, vecstb, course, speed);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -212,7 +216,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
 
         objH = S52_setDimension(objH, a, b, c, d);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
 
@@ -233,7 +238,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
 
         objH = S52_setVESSELstate(objH, vesselSelect, vestat, vesselTurn);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -249,7 +255,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
         S52ObjectHandle   objH = (S52ObjectHandle) lui;
         objH = S52_delMarObj(objH);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -275,7 +282,8 @@ static int                 _handleS52method(const gchar *str, char *result, char
         // debug
         //PRINTF("S52_newMarObj -> objH: %lu\n", (long unsigned int *) objH);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }
@@ -537,17 +545,18 @@ static int                 _handleS52method(const gchar *str, char *result, char
         goto exit;
     }
 
-    // S52ObjectHandle STD S52_getMarObjH(unsigned int S57ID);
-    if (0 == g_strcmp0(cmdName, "S52_getMarObjH")) {
+    // S52ObjectHandle STD S52_getMarObj(unsigned int S57ID);
+    if (0 == g_strcmp0(cmdName, "S52_getMarObj")) {
         if (1 != count) {
             _setErr(err, "params 'S57ID' not found");
             goto exit;
         }
 
         long unsigned int S57ID = (long unsigned int) json_array_get_number(paramsArr, 0);
-        S52ObjectHandle   objH  = S52_getMarObjH(S57ID);
+        S52ObjectHandle   objH  = S52_getMarObj(S57ID);
 
-        _encode(result, "[%lu]", (long unsigned int *) objH);
+        //_encode(result, "[%lu]", (long unsigned int *) objH);
+        _encode(result, "[%u]", objH);
 
         goto exit;
     }

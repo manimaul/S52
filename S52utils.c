@@ -40,7 +40,7 @@
 #include <time.h>         // time
 #include <unistd.h>       // write
 
-// configuration file
+// debug - configuration file
 #ifdef S52_USE_ANDROID
 #define CONF_NAME   "/sdcard/s52droid/s52.cfg"
 #else
@@ -49,44 +49,118 @@
 
 #define NaN         (1.0/0.0)
 
-#ifdef S52_USE_LOG
-static gint     _log = 0;
+#ifdef S52_USE_LOGFILE
+static gint     _logFile = 0;
 static GTimeVal _now;
 #endif
 
+// internal libS52.so version
+static char _version[] = "$Revision: 1.126 $\n"
+      "libS52-1.157\n"
+#ifdef _MINGW
+      "_MINGW\n"
+#endif
+#ifdef S52_USE_GV
+      "S52_USE_GV\n"
+#endif
+#ifdef GV_USE_DOUBLE_PRECISION_COORD
+      "GV_USE_DOUBLE_PRECISION_COORD\n"
+#endif
+#ifdef S52_USE_GLIB2
+      "S52_USE_GLIB2\n"
+#endif
+#ifdef S52_USE_OGR_FILECOLLECTOR
+      "S52_USE_OGR_FILECOLLECTOR\n"
+#endif
+#ifdef S52_USE_PROJ
+      "S52_USE_PROJ\n"
+#endif
+#ifdef S52_USE_SUPP_LINE_OVERLAP
+      "S52_USE_SUPP_LINE_OVERLAP\n"
+#endif
+#ifdef S52_DEBUG
+      "S52_DEBUG\n"
+#endif
+#ifdef S52_USE_LOG
+      "S52_USE_LOG\n"
+#endif
+#ifdef S52_USE_LOGFILE
+      "S52_USE_LOGFILE\n"
+#endif
+#ifdef S52_USE_DBUS
+      "S52_USE_DBUS\n"
+#endif
+#ifdef S52_USE_SOCK
+      "S52_USE_SOCK\n"
+#endif
+#ifdef S52_USE_GOBJECT
+      "S52_USE_GOBJECT\n"
+#endif
+#ifdef S52_USE_BACKTRACE
+      "S52_USE_BACKTRACE\n"
+#endif
+#ifdef S52_USE_EGL
+      "S52_USE_EGL\n"
+#endif 
+#ifdef S52_USE_GL1
+      "S52_USE_GL1\n"
+#endif
+#ifdef S52_USE_OPENGL_VBO
+      "S52_USE_OPENGL_VBO\n"
+#endif
+#ifdef S52_USE_GLSC1
+      "S52_USE_GLSC1\n"
+#endif
+#ifdef S52_USE_GL2
+      "S52_USE_GL2\n"
+#endif
+#ifdef S52_USE_GLES2
+      "S52_USE_GLES2\n"
+#endif
+#ifdef S52_USE_ANDROID
+      "S52_USE_ANDROID\n"
+#endif
+#ifdef S52_USE_TEGRA2
+      "S52_USE_TEGRA2\n"
+#endif
+#ifdef S52_USE_ADRENO
+      "S52_USE_ADRENO\n"
+#endif
+#ifdef S52_USE_COGL
+      "S52_USE_COGL\n"
+#endif
+#ifdef S52_USE_FREETYPE_GL
+      "S52_USE_FREETYPE_GL\n"
+#endif
+#ifdef S52_USE_SYM_AISSEL01
+      "S52_USE_SYM_AISSEL01\n"
+#endif
+#ifdef S52_USE_WORLD
+      "S52_USE_WORLD\n"
+#endif
+#ifdef S52_USE_SYM_VESSEL_DNGHL
+      "S52_USE_SYM_VESSEL_DNGHL\n"
+#endif
+#ifdef S52_USE_TXT_SHADOW
+      "S52_USE_TXT_SHADOW\n"
+#endif
+#ifdef S52_USE_RADAR
+      "S52_USE_RADAR\n"
+#endif
+#ifdef S52_USE_MESA3D
+      "S52_USE_MESA3D\n"
+#endif
+#ifdef S52_USE_C_AGGR_C_ASSO
+      "S52_USE_C_AGGR_C_ASSO\n"
+#endif
+;
+
+
 typedef void (*GPrintFunc)(const gchar *string);
 static GPrintFunc   _oldPrintHandler = NULL;
-static S52_error_cb _err_cb = NULL;
+static S52_log_cb   _log_cb          = NULL;
 
 void g_get_current_time(GTimeVal *result);
-
-void _printf(const char *file, int line, const char *function, const char *frmt, ...)
-{
-    //S52GL.c:6020 in _contextValid(): Renderer:   Gallium 0.4 on AMD CEDAR
-    //S52GL.c:6021 in _contextValid(): Version:    3.0 Mesa 10.1.3
-    //S52GL.c:6022 in _contextValid(): Shader:     1.30
-    // this driver need a buffer of 5K to fit all extesion string
-
-    //const int MAX = 1024 + 1024 + 1024 + 1024;
-    const int MAX = 1024 + 1024 + 1024 + 1024 + 1024;
-    char buf[MAX];
-    snprintf(buf, MAX, "%s:%i in %s(): ", file, line, function);
-
-	int size = (int) strlen(buf);
-    if (size < MAX) {
-		va_list argptr;
-		va_start(argptr, frmt);
-		int n = vsnprintf(&buf[size], (MAX-size), frmt, argptr);
-        va_end(argptr);
-
-        if (n > (MAX-size)) {
-            g_print("WARNING: _printf(): string buffer FULL, str len:%i, buf len:%i\n", n, (MAX-size));
-            g_assert(0);
-        }
-	}
-
-    g_print("%s", buf);
-}
 
 int      S52_getConfig(const char *label, valueBuf *vbuf)
 // return TRUE and string value in vbuf for label, FALSE if fail
@@ -107,14 +181,12 @@ int      S52_getConfig(const char *label, valueBuf *vbuf)
 
    // prevent buffer overflow
    //sprintf(frmt, "%s%i%s", " %s %", MAXL-1, "[^\n]s");
-   SPRINTF(frmt, "%s%i%s", " %s %", MAXL-1, "[^\n]s");
+   SNPRINTF(frmt, MAXL, "%s%i%s", " %s %", MAXL-1, "[^\n]s");
    //printf("frmt:%s\n", frmt);
 
    ret = fscanf(fp, frmt, lbuf, vbuf);
    while (ret > 0) {
-       //if (('#'!=lbuf[0]) && (0 == strncmp(lbuf, label, strlen(label)))) {
        if (('#'!=lbuf[0]) && (0 == S52_strncmp(lbuf, label, S52_strlen(label)))) {
-               //sscanf(c, "%255[^\n]", *vbuf);
                PRINTF("label:%s value:%s \n", lbuf, *vbuf);
                fclose(fp);
                return TRUE;
@@ -137,7 +209,7 @@ int      S52_atoi(const char *str)
 {
     //return atoi(str);
 
-    // the to (int) might not be such a great idea!
+    // the to (int) might not be such a great idea!  (no rounding)
     return (int)S52_atof(str);
 }
 
@@ -209,6 +281,7 @@ int      S52_fclose (FILE *fd)
     return fclose(fd);
 }
 
+//#if 0
 gboolean S52_string_equal(const GString *v, const GString *v2)
 {
 #ifdef S52_USE_GLIB2
@@ -227,6 +300,7 @@ gboolean S52_string_equal(const GString *v, const GString *v2)
 #endif
 
 }
+//#endif
 
 void     S52_tree_replace(GTree *tree, gpointer key, gpointer value)
 {
@@ -237,7 +311,40 @@ void     S52_tree_replace(GTree *tree, gpointer key, gpointer value)
 #endif
 }
 
-#ifdef S52_USE_LOG
+cchar   *S52_utils_version(void)
+{
+    return _version;
+}
+
+void _printf(const char *file, int line, const char *function, const char *frmt, ...)
+{
+    //S52GL.c:6020 in _contextValid(): Renderer:   Gallium 0.4 on AMD CEDAR
+    //S52GL.c:6021 in _contextValid(): Version:    3.0 Mesa 10.1.3
+    //S52GL.c:6022 in _contextValid(): Shader:     1.30
+    // this driver need a buffer of 5K to fit all extesion string
+
+    //const int MAX = 1024 + 1024 + 1024 + 1024;
+    const int MAX = 1024 + 1024 + 1024 + 1024 + 1024;
+    char buf[MAX];
+    snprintf(buf, MAX, "%s:%i in %s(): ", file, line, function);
+
+	int size = (int) strlen(buf);
+    if (size < MAX) {
+		va_list argptr;
+		va_start(argptr, frmt);
+		int n = vsnprintf(&buf[size], (MAX-size), frmt, argptr);
+        va_end(argptr);
+
+        if (n > (MAX-size)) {
+            g_print("WARNING: _printf(): string buffer FULL, str len:%i, buf len:%i\n", n, (MAX-size));
+            g_assert(0);
+        }
+	}
+
+    g_print("%s", buf);
+}
+
+#ifdef S52_USE_LOGFILE
 static void     _S52_printf(const gchar *string)
 {
     char str[MAXL];
@@ -246,35 +353,43 @@ static void     _S52_printf(const gchar *string)
     snprintf(str, MAXL-1, "%s %s", g_time_val_to_iso8601(&_now), string);
 
     // if user set a callback .. call it
-    if (NULL != _err_cb) {
-        _err_cb(str);
+    if (NULL != _log_cb) {
+        _log_cb(str);
     }
+
     // log to file
-    write(_log, str, strlen(str));
+    if (NULL != _logFile) {
+        write(_logFile, str, strlen(str));
+    }
+
+    // STDOUT
+    g_printf("%s", str);
 }
 #endif
 
-int      S52_initLog(S52_error_cb err_cb)
+int      S52_initLog(S52_log_cb log_cb)
 // set print handler
 // set tmp log file
 {
-    _err_cb = err_cb;
+    _log_cb = log_cb;
 
-#ifdef S52_USE_LOG
+#ifdef S52_USE_LOGFILE
     GError *error = NULL;
-    _log = g_file_open_tmp("XXXXXX", NULL, &error);
-    if (-1 == _log) {
-        PRINTF("g_file_open_tmp(): failed\n");
+    _logFile = g_file_open_tmp("XXXXXX", NULL, &error);
+    if (-1 == _logFile) {
+        PRINTF("WARNING: g_file_open_tmp(): failed\n");
     } else {
-        PRINTF("tmp dir:%s\n", g_get_tmp_dir());
+        PRINTF("DEBUG: tmp dir:%s\n", g_get_tmp_dir());
     }
     if (NULL != error) {
         g_printf("WARNING: g_file_open_tmp() failed (%s)\n", error->message);
         g_error_free(error);
     }
+
     _oldPrintHandler = g_set_print_handler(_S52_printf);
+
 #else
-    PRINTF("DEBUG: no LOG, compiler flags 'S52_USE_LOG' not set\n");
+    PRINTF("DEBUG: no LOGFILE, compiler flags 'S52_USE_LOGFILE' not set\n");
 #endif
 
     return TRUE;
@@ -283,11 +398,11 @@ int      S52_initLog(S52_error_cb err_cb)
 int      S52_doneLog()
 {
     g_set_print_handler(_oldPrintHandler);
-    _err_cb = NULL;
+    _log_cb = NULL;
 
-#ifdef S52_USE_LOG
-    if (0 != _log)
-        close(_log);
+#ifdef S52_USE_LOGFILE
+    if (0 != _logFile)
+        close(_logFile);
 #endif
 
     return TRUE;

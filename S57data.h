@@ -28,14 +28,19 @@
 #include <glib.h>       // guint, GArray, GData, GString, gconstpointer
 #define GCPTR gconstpointer
 
+// MAXINT-6 is how OGR tag an UNKNOWN value
+// see gdal/ogr/ogrsf_frmts/s57/s57.h:126
+// it is then turn into a string in gv_properties
+#define EMPTY_NUMBER_MARKER "2147483641"  /* MAXINT-6 */
+
 // internal geo enum used to link S52 to S57 geo
 // S57 object type have a PLib enum: P,L,A
 typedef enum S57_Obj_t {
-    _META_T  =  0 ,       // meta geo stuff (ex: C_AGGR)
-    POINT_T  = 'P',       // 80 (point)
-    LINES_T  = 'L',       // 76 (line)
-    AREAS_T  = 'A',       // 65 (area)
-    N_OBJ_T  =  4         // number of object type
+    S57__META_T  =  0 ,       // meta geo stuff (ex: C_AGGR)
+    S57_POINT_T  = 'P',       // 80 (point)
+    S57_LINES_T  = 'L',       // 76 (line)
+    S57_AREAS_T  = 'A',       // 65 (area)
+    S57_N_OBJ_T  =  4         // number of object type
 } S57_Obj_t;
 
 // experimental (fail - because Edge ID are used to match geo)
@@ -141,14 +146,12 @@ double    S57_resetScamin(S57_geo *geo);
 int       S57_setRelationship(S57_geo *geo, S57_geo *geoRel);
 S57_geo  *S57_getRelationship(S57_geo *geo);
 
-// suppression
-gboolean  S57_setSupp(S57_geo *geo, gboolean supp);
-gboolean  S57_getSupp(S57_geo *geo);
-
+#if 0
 // count the number of 'real (6length)' attributes
-//int       S57_getNumAtt(S57_geo *geo);
+int       S57_getNumAtt(S57_geo *geo);
 // return the 'real' attributes of the geodata. name and val must be preallocated, and be sufficient large. (use S57_getNumAtt for counting)
-//int       S57_getAttributes(S57_geo *geo, char **name, char **val);
+int       S57_getAttributes(S57_geo *geo, char **name, char **val);
+#endif
 
 // debug
 int       S57_dumpData(S57_geo *geo, int dumpCoords);
@@ -164,7 +167,7 @@ int       S57_geo2prj3dv(guint npt, double *data);
 int       S57_geo2prj(S57_geo *geo);
 #endif
 
-int       S57_isPtInside(int npt, double *xyz, double x, double y, int close);
+int       S57_isPtInside(int npt, double *xyz, gboolean close, double x, double y);
 int       S57_touch(S57_geo *geoA, S57_geo *geoB);
 
 guint     S57_getGeoSize(S57_geo *geo);
@@ -185,9 +188,14 @@ GString  *S57_getRCIDstr(S57_geo *geo);
 S57_AW_t  S57_getOrigAW (S57_geo *geo);
 #endif
 
+// FIXME: setHL() rather than hl ON/OFF !
+//int     S57_setHighlight(S57_geo *geo, gboolean highlight);
 int       S57_highlightON (S57_geo *geo);
 int       S57_highlightOFF(S57_geo *geo);
-int       S57_getHighlight(S57_geo *geo);
+gboolean  S57_isHighlighted(S57_geo *geo);
+
+int       S57_setHazard(S57_geo *geo, gboolean hazard);
+gboolean  S57_isHazard (S57_geo *geo);
 
 //// returns the window boundary with the current projection. After  the geo2prj and initproj have been public, this function may be moved to application layer.
 //void S57_getGeoWindowBoundary(double lat, double lng, double scale, int width, int height, double *latMin, double *latMax, double *lngMin, double *lngMax);

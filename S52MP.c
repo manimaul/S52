@@ -23,6 +23,7 @@
 
 
 #include "S52MP.h"      // S52_MP_get/set()
+#include "S52utils.h"   // PRINTF()
 
 #include <glib.h>       // TRUE, FALSE
 
@@ -80,7 +81,6 @@ gboolean SYMBOLIZED_BND  = TRUE;     // symbolized area boundaries
 
 // textual name of mariner's parameter
 // WARNING: must be in sync with S52MarinerParameter
-// WARNING: must be in sync with S52_MARparamName
 static double _MARparamVal[] = {
     0.0,      // 0 - ERROR: 0 - no error,
 
@@ -101,18 +101,17 @@ static double _MARparamVal[] = {
     2.0,      // 5 - SHALLOW_CONTOUR (SEABED01 default)
     //5.0,      // 5 - SHALLOW_CONTOUR
 
-    //30.0,     // 6 - DEEP_CONTOUR (SEABED01 defautl)
+    //30.0,     // 6 - DEEP_CONTOUR (SEABED01 default)
     15.0,     // 6 - DEEP_CONTOUR
 
-    FALSE,    // 7 - SHALLOW_PATTERN (SEABED01 defautl)
+    FALSE,    // 7 - SHALLOW_PATTERN (SEABED01 default)
     //TRUE,    // 7 - SHALLOW_PATTERN
 
     FALSE,    // 8 - SHIPS_OUTLINE
 
     0.0,      // 9 - S52_DISTANCE_TAGS (default OFF)
 
-    //0.0,      // 10 - TIME_TAGS
-    1.0,      // 10 - TIME_TAGS  (debug)
+    0.0,      // 10 - TIME_TAGS (default OFF)
 
     TRUE,     // 11 - FULL_SECTORS
 
@@ -145,7 +144,7 @@ static double _MARparamVal[] = {
 
 
     //---- experimantal ----
-    0.0,      // 21 - S52_MAR_FONT_SOUNDG   --use font for souding (on/off)
+    0.0,      // 21 - S52_MAR_FONT_SOUNDG   --NOT IMPLEMENTED: use font for souding (on/off)
     0.0,      // 22 - S52_MAR_DATUM_OFFSET  --value of chart datum offset (raster_sound must be ON)
 
     1.0,      // 23 - S52_MAR_SCAMIN        --flag for using SCAMIN filter (on/off)  (default ON)
@@ -157,7 +156,7 @@ static double _MARparamVal[] = {
 
     0.0,      // 26 - display overlapping symbol (default to false, debug)
 
-    //1.0,      // 27 - S52_MAR_DISP_LAYER_LAST to enable S52_drawLast()
+              // 27 - S52_MAR_DISP_LAYER_LAST to enable S52_drawLast()
     //S52_MAR_DISP_LAYER_LAST_NONE,   // 1 << 3  0x0001000 - MARINERS' NONE
     S52_MAR_DISP_LAYER_LAST_STD,      // 1 << 4  0x0010000 - MARINERS' STANDARD (default)
     //S52_MAR_DISP_LAYER_LAST_OTHER,  // 1 << 5  0x0100000 - MARINERS' OTHER
@@ -165,7 +164,8 @@ static double _MARparamVal[] = {
 
     0.0,      // 28 - S52_MAR_ROT_BUOY_LIGHT (deg)
 
-    0.0,      // 29 - S52_MAR_DISP_CRSR_POS, display cursor position (default off)
+    1.0,      // 29 - S52_MAR_DISP_CRSR_PICK, 0 - off, 1 - pick/highlight top object, 2 - pick stack/highlight top,
+              //                              3 - pick stack+ASSOC/highlight ASSOC (compiled with -DS52_USE_C_AGGR_C_ASSO)
 
     0.0,      // 30 - S52_MAR_DISP_GRATICULE  (default off)
 
@@ -201,47 +201,41 @@ static double _MARparamVal[] = {
 
     0.0,      // 45 - S52_MAR_DISP_RADAR_LAYER - display Raster: RADAR, Bathy, ... (on/off) (default off)
 
-    46.0      // number of parameter type
+    1852.0,   // 46 - S52_MAR_GUARDZONE_BEAM - Danger/Indication Highlight used by LEGLIN & Position (meters)
+    1852.0*6, // 47 - S52_MAR_GUARDZONE_LENGTH - Danger/Indication Highlight used by Position
+              //(meters, user computed from speed/time or distance) [default 6 NM, 30 min. @ 12kt]
+
+    48.0      // number of parameter type
 };
 
 double S52_MP_get(S52MarinerParameter param)
 // return Mariner parameter or S52_MAR_ERROR if fail
 // FIXME: check mariner param against groups selection
 {
-    if (S52_MAR_ERROR<param && param<S52_MAR_NUM)
-        return _MARparamVal[param];
+    if (param<S52_MAR_ERROR || S52_MAR_NUM<=param) {
+    //if (S52_MAR_ERROR<=param && param<S52_MAR_NUM) {
+        PRINTF("WARNING: param invalid(%f)\n", param);
+        g_assert(0);
 
-    return _MARparamVal[S52_MAR_ERROR];
+        return _MARparamVal[S52_MAR_ERROR];
+    }
+
+    return _MARparamVal[param];
 }
 
 int    S52_MP_set(S52MarinerParameter param, double val)
 {
+    if (param<S52_MAR_ERROR || S52_MAR_NUM<=param) {
+        PRINTF("WARNING: param invalid(%f)\n", param);
+        g_assert(0);
+
+        return FALSE;
+    }
+
     _MARparamVal[param] = val;
 
     return TRUE;
 }
-
-/*
-int    S52_MP_write(const char *filename)
-// write back param to file
-{
-    const char *fn = NULL;
-
-    PRINTF("FIXME: not implemented\n");
-
-    if (NULL == filename)
-        fn = CONF_NAME;
-    else
-        fn = filename;
-
-    // TODO: write the stuff
-    // ...
-
-    return FALSE;
-}
-*/
-
-
 
 
 // ------ Text Display Priority --------------------------------------------------
@@ -249,12 +243,37 @@ int    S52_MP_write(const char *filename)
 //
 
 #define TEXT_IDX_MAX 100
-static unsigned int _textDisp[TEXT_IDX_MAX]; // assume compiler init to 0 (C99!)
+//static unsigned int _textDisp[TEXT_IDX_MAX]; // assume compiler init to 0 (C99!)
+//static unsigned int _textDisp[TEXT_IDX_MAX] = {[0 ... 99] = 1}; // not ISO C (gcc specific)
+static unsigned int _textDisp[TEXT_IDX_MAX] = {
+    1,1,1,1,1,1,1,1,1,1,   // 00 - 09 reserved for future assignment by IHO
+    1,1,1,1,1,1,1,1,1,1,   // 10 - 19 Important Text
+    1,1,1,1,1,1,1,1,1,1,   // 20 - 29 Other text
+    1,1,1,1,1,1,1,1,1,1,   // 30 - 39 30 - na, 31 - national language text (NOBJNM, NINFOM, NTXTDS)
+    1,1,1,1,1,1,1,1,1,1,   // 40 - 49 32 - 49 reserved for IHO
+    1,1,1,1,1,1,1,1,1,1,   // 50 - 59 mariners text, including planned speed etc.
+    1,1,1,1,1,1,1,1,1,1,   // 60 - 69 manufacturer's text
+    1,1,1,1,1,1,1,1,1,1,   // 70 - 79 future requirements (AIS etc.)
+    1,1,1,1,1,1,1,1,1,1,   // 80 - 89 future requirements (AIS etc.)
+    1,1,1,1,1,1,1,1,1,1    // 90 - 99 future requirements (AIS etc.)
+};
 
 int    S52_MP_setTextDisp(unsigned int prioIdx, unsigned int count, unsigned int state)
 {
-    if (prioIdx+count > TEXT_IDX_MAX)
+    if (TEXT_IDX_MAX < prioIdx) {
+        PRINTF("WARNING: prioIdx out of bound (%i)\n", prioIdx);
         return FALSE;
+    }
+
+    if (TEXT_IDX_MAX < count) {
+        PRINTF("WARNING: count out of bound (%i)\n", count);
+        return FALSE;
+    }
+
+    if (prioIdx+count > TEXT_IDX_MAX) {
+        PRINTF("WARNING: prioIdx + count out of bound (%i)\n", prioIdx + count);
+        return FALSE;
+    }
 
     for (guint i=0; i<count; ++i)
         _textDisp[prioIdx + i] = state;
@@ -267,5 +286,5 @@ int    S52_MP_getTextDisp(unsigned int prioIdx)
     if (prioIdx < TEXT_IDX_MAX)
         return _textDisp[prioIdx];
     else
-        return FALSE;
+        return -1;
 }
