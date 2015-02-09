@@ -35,15 +35,17 @@ all: s52gtk2        # OGR & GTK2 & GL 1.5 (VBO)
 
 SHELL = /bin/sh
 
-.PHONY: test/* clean distclean LIBVERS
+.PHONY: test/* clean distclean LIBS52VERS
 
 
 DBG0   = -O0 -g
 DBG1   = -O0 -g1 -Wall -pedantic -Wextra
 DBG2   = -O0 -g2 -Wall -pedantic -Wextra
-DBG3   = -O0 -g3 -Wall -pedantic -Wextra -ggdb3 -rdynamic -fstack-protector-all
+DBG3   = -O0 -g3 -Wall -pedantic -Wextra -ggdb3 -fstack-protector-all
 DBGOFF = -DG_DISABLE_ASSERT
 DBG    = $(DBG3)
+
+# for CLang: no -rdynamic
 
 # from clutter
 # Compiler flags: -Werror -Wall -Wshadow -Wcast-align -Wno-uninitialized -Wempty-body -Wformat-security -Winit-self
@@ -60,9 +62,11 @@ DBG    = $(DBG3)
 #CXX  = tcc -fPIC -fmudflap
 #CC   = gcc -std=c99 -fPIC -DMALLOC_CHECK_=3 -D_FORTIFY_SOURCE=2
 #CC   = gcc -std=c99 -fPIC
-CC   = gcc -std=gnu99 -fPIC -DMALLOC_CHECK_=3 -D_FORTIFY_SOURCE=2 # need gnu99 to get M_PI
+#CC   = gcc -std=gnu99 -fPIC -DMALLOC_CHECK_=3 -D_FORTIFY_SOURCE=2 # need gnu99 to get M_PI
+CC   = clang -fPIC
 #CC   = g++ -fPIC
-CXX  = g++ -fPIC
+#CXX  = g++ -fPIC
+CXX  = clang -fPIC
 
 MINGW = /usr/bin/i586-mingw32msvc-
 #MINGW = /usr/bin/i686-w64-mingw32-
@@ -463,14 +467,14 @@ $(S52DROIDLIB)/libS52.a: $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARS
 	$(RANLIB)  $(S52DROIDLIB)/libS52.a
 
 libS52.so: $(OBJS_S52) $(OBJ_PARSON) tags
-	$(CXX) -rdynamic -shared $(OBJS_S52) $(OBJ_PARSON) $(LIBS) -o $@
+	$(CXX) -shared $(OBJS_S52) $(OBJ_PARSON) $(LIBS) -o $@
 
 libS52gl2.so:  $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) tags
-	$(CXX) -rdynamic -shared  $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
+	$(CXX) -shared  $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
 	-ln -sf libS52gl2.so libS52.so
 
 libS52egl.so: $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) tags
-	$(CXX) -rdynamic -shared $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
+	$(CXX) -shared $(OBJS_S52) $(OBJS_TESS) $(OBJS_FREETYPE_GL) $(OBJ_PARSON) $(LIBS) -o $@
 	-ln -sf libS52egl.so libS52.so
 
 libS52gv.so: $(OBJS_S52) $(OBJS_GV)
@@ -607,19 +611,19 @@ tags:
 err.txt: *.c *.h
 	cppcheck --enable=all $(DEFS) *.c 2> err.txt
 
-#"libS52-1.145\n" --> 1.145
-LIBVERS = $(shell grep libS52- S52utils.c | sed 's/.*"libS52-\(.*\)\\n"/\1/' )
+# "libS52-2014DEC27-1.157" --> 2014DEC27-1.145
+LIBS52VERS = $(shell grep libS52- S52utils.c | sed 's/.*"libS52-\(.*\)"/\1/' )
 
-S52-$(LIBVERS).gir: S52.h
-	g-ir-scanner --verbose --namespace=S52 --nsversion=$(LIBVERS) --library=S52 --no-libtool S52.h -o $@
+S52-$(LIBS52VERS).gir: S52.h
+	g-ir-scanner --verbose --namespace=S52 --nsversion=$(LIBS52VERS) --library=S52 --no-libtool S52.h -o $@
 	sudo cp $@ /usr/share/gir-1.0/
 
-S52-$(LIBVERS).typelib: S52-$(LIBVERS).gir
-	g-ir-compiler S52-$(LIBVERS).gir -o $@
+S52-$(LIBS52VERS).typelib: S52-$(LIBS52VERS).gir
+	g-ir-compiler S52-$(LIBS52VERS).gir -o $@
 	sudo cp $@ /usr/lib/girepository-1.0/
 
 # https://git.gnome.org/browse/introspection-doc-generator
-doc: S52-$(LIBVERS).typelib
+doc: S52-$(LIBS52VERS).typelib
 	(cd /home/sduclos/dev/prog/doc-generator/introspection-doc-generator/; seed docs.js ../tmp S52;)
 	cp /home/sduclos/dev/prog/doc-generator/introspection-doc-generator/tmp/seed/* doc/tmp
 

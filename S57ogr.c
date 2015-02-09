@@ -36,8 +36,6 @@ static int        _setExtent(S57_geo *geoData, OGRGeometryH geometry)
 {
     return_if_null(geoData);
     return_if_null(geometry);
-    //if (NULL == geometry) || NULL==geoData)
-    //    return FALSE;
 
     OGREnvelope envelope;
 
@@ -78,6 +76,7 @@ static int        _setAtt(S57_geo *geoData, OGRFeatureH hFeature)
 
             S57_setAtt(geoData, propName, propValue);
 
+            /* debug
             if (0 == g_strcmp0(S57_getName(geoData), "M_NPUB")) {
                 PRINTF("DEBUG: M_NPUB-%i: %s --> %s\n", field_index, propName, propValue);
             }
@@ -87,6 +86,7 @@ static int        _setAtt(S57_geo *geoData, OGRFeatureH hFeature)
             if (0 == g_strcmp0(S57_getName(geoData), "C_ASSO")) {
                 PRINTF("DEBUG: C_ASSO-%i: %s --> %s\n", field_index, propName, propValue);
             }
+            */
         }
     }
 
@@ -465,7 +465,7 @@ S57_geo       *S57_ogrLoadObject(const char *objname, void *feature)
 
 
     // debug
-    //if (207 == S57_getGeoID(geoData)) {
+    //if (207 == S57_getGeoS57ID(geoData)) {
     //    S57_dumpData(geoData, FALSE);
     //}
 
