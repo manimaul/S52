@@ -4,7 +4,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2015 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -19,7 +19,6 @@
     You should have received a copy of the Lesser GNU General Public License
     along with OpENCview.  If not, see <http://www.gnu.org/licenses/>.
 */
-
 
 
 #include "S52utils.h"
@@ -55,7 +54,7 @@ static GTimeVal _now;
 #endif
 
 // internal libS52.so version
-static char _version[] = "libS52-2015JAN28-1.159"
+static const char _version[] = "libS52-2015JUN02-1.162"
 #ifdef _MINGW
       ",_MINGW"
 #endif

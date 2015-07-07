@@ -4,7 +4,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2015 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -247,6 +247,28 @@ static
 inline void      _checkError(const char *msg)
 {
 #ifdef S52_DEBUG
+
+///////////////////////////////////////////////////////
+/* C99 TRICK
+// Not really special, but so useful I thought
+// I'll put it here.  Can also be used with other
+// libraries (OpenAL, OpenSLES, ...)
+#ifdef DEBUG
+#  define GL(line) do {                      \
+       line;                                 \
+       assert(glGetError() == GL_NO_ERROR);  \
+   } while(0)
+#else
+#  define GL(line) line
+#endif
+
+// Put GL around all your opengl calls:
+GL(glClear(GL_COLORS_MASK));
+GL(pos_loc = glGetAttribLocation(prog, "pos"));
+*/
+///////////////////////////////////////////////////////
+
+
 /*
 GL_NO_ERROR
                 No error has been recorded. The value of this
@@ -279,7 +301,7 @@ GL_OUT_OF_MEMORY
                     recorded.
 */
 
-    //* Note: glGetError() stall the pipeline - how bad it is ?
+    // Note: glGetError() stall the pipeline - how bad it is ?
     GLint err = GL_NO_ERROR; // == 0x0
     for (err = glGetError(); GL_NO_ERROR != err; err = glGetError()) {
         const char *name = NULL;
@@ -298,13 +320,10 @@ GL_OUT_OF_MEMORY
         PRINTF("from %s: 0x%x (%s)\n", msg, err, name);
 
 #ifdef S52_USE_ANDROID
-        // exit if s52droid restart - tons of error and nothing drawn
-        // so it's useless to keep s52droid running
-        g_assert(0);
+        //g_assert(0);
 #endif
 
     }
-    //*/
 #endif
 }
 
@@ -807,16 +826,16 @@ static int       _win2prj(double *x, double *y)
     float v       = *y;
     float dummy_z = 0.0;
 
-    /* debug
-    if (TRUE == isnan(_pjm[_pjmTop][0])) {
+    //* debug
+    if (0 == _pjm[_pjmTop][0]) {
         PRINTF("WARNING: broken Projection Matrix\n");
         g_assert(0);
         return FALSE;
     }
-    */
+    //*/
 
     if (GL_FALSE == _gluUnProject(u, v, dummy_z, _mvm[_mvmTop], _pjm[_pjmTop], vp, &u, &v, &dummy_z)) {
-        PRINTF("WARNING: UnProjection faild\n");
+        PRINTF("WARNING: UnProjection faild: _mvmTop=%i, _pjmTop=%i\n", _mvmTop, _pjmTop);
         g_assert(0);
         return FALSE;
     }
@@ -1356,21 +1375,10 @@ static double    _getGridRef(S52_obj *obj, double *LLx, double *LLy, double *URx
 static int       _fillArea(S57_geo *geoData)
 //static int       _fillArea(S57_geo *geoData, char LOD)
 {
-    // debug
-    //_S57ID = S57_getGeoS57ID(geoData);
-    //_npoly++;
-    // debug - test optimization
-    //if (0 == g_strcmp0("DEPARE", S57_getName(geoData))) {
-    //    ++_depare;
-    //    return TRUE;
-    //}
-    //++_nAC;
-
-
     S57_prim *prim = S57_getPrimGeo(geoData);
     if (NULL == prim) {
 
-        /*
+        /* GLU_TESS_TOLERANCE is implementation dependant
         switch (LOD) {
         //case -1: break;
         case '0': gluTessProperty(_tobj, GLU_TESS_TOLERANCE, 0.1     ); break;  // world
@@ -2585,7 +2593,6 @@ static int       _renderSY(S52_obj *obj)
         }
 
         if (0==g_strcmp0("ebline", S57_getName(geoData))) {
-
             if (0 == S52_PL_cmpCmdParam(obj, "EBLVRM11")) {
                 _renderSY_POINT_T(obj, ppt[0], ppt[1], orient);
             } else {
@@ -3873,12 +3880,6 @@ static int       _renderAC_VRMEBL01(S52_obj *obj)
     if (FALSE==S57_getGeoData(geo, 0, &npt, &ppt))
         return FALSE;
 
-    if (0 != g_strcmp0("vrmark", S57_getName(geo))) {
-        PRINTF("ERROR: not a 'vrmark' (%s)\n", S57_getName(geo));
-        g_assert(0);
-        return FALSE;
-    }
-
     S52_DList *DListData = S52_PL_getDListData(obj);
     if (NULL == DListData) {
         DListData = S52_PL_newDListData(obj);
@@ -3970,8 +3971,8 @@ static int       _renderAC(S52_obj *obj)
 
     _glUniformMatrix4fv_uModelview();
 
-    //char LOD = S52_PL_getLOD(obj);
     _fillArea(geo);
+    //char LOD = S52_PL_getLOD(obj);
     //_fillArea(geo, LOD);
 
     _checkError("_renderAC()");
@@ -4236,7 +4237,7 @@ static int       _renderTXTAA(S52_obj *obj, S52_Color *color, double x, double y
         _freetype_gl_buffer = _fill_freetype_gl_buffer(_freetype_gl_buffer, str, weight);
     }
 
-    // lone text
+    // lone text - S52_drawStr()
     if (S52_GL_NONE == _crnt_GL_cycle) {
         _freetype_gl_buffer = _fill_freetype_gl_buffer(_freetype_gl_buffer, str, weight);
     }
@@ -5070,24 +5071,31 @@ int        S52_GL_isOFFview(S52_obj *obj)
 // TRUE if object not in view
 {
     //*
+    // FIXME: handle this case like extent in VRMEBL!
     // debug: CHKSYM01 land here because it is on layer 8, other use layer 9
     S57_geo *geo  = S52_PL_getGeo(obj);
     if (0 == g_strcmp0("$CSYMB", S57_getName(geo))) {
 
-        // this is just to quiet this the PRINTF msg
+        /*
+        // this is just to quiet this the PRINTF msg bellow
         // as CHKSYM01/BLKADJ01 pass here (this is normal)
+        // draw() cycle
         GString *attval = S57_getAttVal(geo, "$SCODE");
         if (0 == g_strcmp0(attval->str, "CHKSYM01"))
             return FALSE;
         if (0 == g_strcmp0(attval->str, "BLKADJ01"))
             return FALSE;
 
-        //PRINTF("DEBUG: %s:%s\n", S57_getName(geo), attval->str);
+        PRINTF("DEBUG: %s:%s\n", S57_getName(geo), attval->str);
+        */
 
         return FALSE;
     }
     //*/
 
+    // FIXME: AIS + Vector / Heading, also beam bearing
+
+    // debug
     //if (0 == g_strcmp0(S52_PL_getOBCL(obj), "pastrk")) {
     //    PRINTF("DEBUG: pastrk FOUND\n");
     //}
@@ -5377,6 +5385,9 @@ int        S52_GL_draw(S52_obj *obj, gpointer user_data)
     //if (0 == strcmp("HRBFAC", S52_PL_getOBCL(obj))) {
     //    PRINTF("HRBFAC found\n");
     //    //return;
+    //}
+    //if (0 == strcmp("ebline", S52_PL_getOBCL(obj))) {
+    //    PRINTF("ebline found\n");
     //}
     //if (0 == strcmp("UNSARE", S52_PL_getOBCL(obj))) {
     //    PRINTF("UNSARE found\n");
@@ -6829,18 +6840,28 @@ int        S52_GL_dumpS57IDPixels(const char *toFilename, S52_obj *obj, unsigned
     return TRUE;
 }
 
-int        S52_GL_drawStr(double x, double y, char *str, unsigned int bsize, unsigned int weight)
+int        S52_GL_drawStrWorld(double x, double y, char *str, unsigned int bsize, unsigned int weight)
 // draw string in world coords
 {
+    S52_GL_cycle tmpCrntCycle = _crnt_GL_cycle;
+    _crnt_GL_cycle = S52_GL_NONE;
+
     S52_Color *c = S52_PL_getColor("CHBLK");  // black
     _renderTXTAA(NULL, c, x, y, bsize, weight, str);
+
+    _crnt_GL_cycle = tmpCrntCycle;
 
     return TRUE;
 }
 
-int        S52_GL_drawStrWin(double pixels_x, double pixels_y, const char *colorName, unsigned int bsize, const char *str)
+int        S52_GL_drawStr(double pixels_x, double pixels_y, const char *colorName, unsigned int bsize, const char *str)
 // draw a string in window coords
 {
+    if (S52_GL_INIT == _crnt_GL_cycle) {
+        PRINTF("WARNING: init GL first (draw)\n");
+        return FALSE;
+    }
+
     S52_Color *c = S52_PL_getColor(colorName);
 
     _GL_BEGIN = TRUE;
