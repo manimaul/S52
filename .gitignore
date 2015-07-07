@@ -4,3 +4,6 @@ cvs_status.*
 *.o
 *.a
 tags
+
+*.iml
+.idea/
