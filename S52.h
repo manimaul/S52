@@ -4,7 +4,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2015 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -21,7 +21,7 @@
 */
 
 
-// Summary
+// Summary:
 // - def / type / enum
 // - call at any time
 // - call available fater S52_init()
@@ -124,7 +124,7 @@ typedef enum S52MarinerParameter {
 
     S52_MAR_DISP_NODATA_LAYER   = 38,   // display NODATA layer 0 (on/off) (default on)
 
-    S52_MAR_DISP_VESSEL_DELAY   = 39,   // time delay (sec) defore deleting old AIS (default 600 sec, 0 - OFF)
+    S52_MAR_DISP_VESSEL_DELAY   = 39,   // time delay (sec) defore deleting old AIS (default 0 - OFF)
 
     S52_MAR_DISP_AFTERGLOW      = 40,   // display synthetic afterglow (in PLAUX_00.DAI) for OWNSHP & VESSEL (on/off)
 
@@ -607,8 +607,6 @@ DLL int    STD S52_loadPLib(const char *plibName);
  *
  * List of PLib name loaded delimited by ','
  *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
- *
  *
  * Return: (transfer none): string
  */
@@ -620,8 +618,6 @@ DLL const char * STD S52_getPLibNameList(void);
  * List of palettes name loaded separated by ','.
  * Note: use S52_MAR_COLOR_PALETTE, as an index, to select one of them.
  *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
- *
  *
  * Return: (transfer none): NULL if call fail
  */
@@ -631,8 +627,6 @@ DLL const char * STD S52_getPalettesNameList(void);
  * S52_getCellNameList:
  *
  * List of cells name loaded
- *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
  *
  *
  * Return: (transfer none): NULL if call fail
@@ -646,8 +640,6 @@ DLL const char * STD S52_getCellNameList(void);
  * if @cellName is not NULL then return a list of all S57 class
  * in the cell @cellName. The first element of the list is the cell's name.
  * If @cellName is NULL then all S57 class is return.
- *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
  *
  *
  * Return: (transfer none): List of all class name separeted by ',', NULL if call fail
@@ -668,8 +660,6 @@ DLL const char * STD S52_getS57ClassList(const char *cellName);
  * <disp cat>  ::= D|S|O|A|T|P|-        (see S52PL.h:S52_DisCat)
  * <disp prio> ::= 0|1|2|3|4|5|6|7|8|9
  *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
- *
  *
  * Return: (transfer none): string of all element separeted by ',', NULL if call fail
  */
@@ -679,9 +669,7 @@ DLL const char * STD S52_getObjList(const char *cellName, const char *className)
  * S52_getAttList: get Attributes of a S52 object (S57ID)
  * @S57ID:  (in) : a S52 object has a unique S57ID
  *
- * Where the first elementy is the ID, folowed by <key>:<value> pair.
- *
- * WARNING: caller must save the string before calling libS52 again (dandling ptr)
+ * Where the first element is the '<ObjName>:<S57ID>' folowed by list of '<key>:<value>' pair.
  *
  *
  * Return: (transfer none): string of all element separeted by ',', NULL if call fail

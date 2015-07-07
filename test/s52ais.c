@@ -5,7 +5,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2015 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -51,6 +51,11 @@ static GMainLoop *_main_loop       = NULL;
 #define PATH       "/sdcard/s52droid/bin"
 #define AIS        PATH "/s52ais"
 #define PID        ".pid"
+
+#else
+
+#define LOGI(...)   g_print(__VA_ARGS__)
+
 #endif
 
 /*
@@ -204,8 +209,9 @@ static struct sigaction _old_signal_handler_SIGTERM;
 #endif
 
 #ifdef S52_USE_ANDROID
-#define GPSD_HOST "192.168.1.66"  // connect to GPSD on local network
+//#define GPSD_HOST "192.168.1.66"  // connect to GPSD on local network
 //#define GPSD_HOST "192.168.1.68"  // connect to GPSD on local network
+#define GPSD_HOST "192.168.1.70"  // connect to GPSD on local network
 #else
 #define GPSD_HOST "localhost"     // connect to local GPSD
 #endif
@@ -890,7 +896,7 @@ static int           _setAISSta (unsigned int mmsi, int status, int turn)
 static int           _setAISDel (_ais_t *ais)
 {
     if (NULL == ais) {
-        printf("AIS is NULL!\n");
+        g_print("s52ais:_setAISDel(): WARNING: AIS is NULL!\n");
         g_assert(0);
     }
 

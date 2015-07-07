@@ -4,7 +4,7 @@
 
 /*
     This file is part of the OpENCview project, a viewer of ENC.
-    Copyright (C) 2000-2014 Sylvain Duclos sduclos@users.sourceforge.net
+    Copyright (C) 2000-2015 Sylvain Duclos sduclos@users.sourceforge.net
 
     OpENCview is free software: you can redistribute it and/or modify
     it under the terms of the Lesser GNU General Public License as published by
@@ -130,8 +130,8 @@ int   S52_GL_getViewPort(int *x, int *y, int *width, int *height);
 const
 char *S52_GL_getNameObjPick(void);
 
-int   S52_GL_drawStr(double x, double y, char *str, unsigned int bsize, unsigned int weight);
-int   S52_GL_drawStrWin(double pixels_x, double pixels_y, const char *colorName, unsigned int bsize, const char *str);
+int   S52_GL_drawStrWorld(double x, double y, char *str, unsigned int bsize, unsigned int weight);
+int   S52_GL_drawStr(double pixels_x, double pixels_y, const char *colorName, unsigned int bsize, const char *str);
 int   S52_GL_getStrOffset(double *offset_x, double *offset_y, const char *str);
 
 int   S52_GL_drawGraticule(void);

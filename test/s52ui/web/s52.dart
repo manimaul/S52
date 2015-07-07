@@ -4,24 +4,20 @@ part of s52ui;
 //////////////////////////////////////////////////////
 //
 // Base Class that mimic S52 interface (S52.h)
-// UI <--> WebSocket (s52ui.html)
+// UI <--> WebSocket <--> libS52.so
 //
 
 class Cmd {
-  String    _str;
   int       _id;
   Completer _completer;
 
   Cmd(String str, int id, Completer completer) {
-    _str       = str;
     _id        = id;
     _completer = completer;
   }
 }
 
-//abstract class S52 {
 class S52 {
-  //Completer _completer = null;
   Map _data = JSON.decode('{"id":1,"method":"???","params":["???"]}');
   int _id   = 1;
 
@@ -36,8 +32,8 @@ class S52 {
   bool  _skipTimer = false;
   set skipTimer(val) => _skipTimer = val;
 
-  // FIXME: use Queue to stack S52 cmd .. what happend if returning out-of-order!
-  //Queue<String> _queue = new Queue<String>();
+  // convolute way to handle ordering of snd/rcv Cmd
+  // the new await/async could simplify the logic
   Queue<Cmd> _queue = new Queue<Cmd>();
 
   // S52 color for UI element
@@ -87,7 +83,7 @@ class S52 {
   static const int MAR_DISP_LAYER_LAST_NONE   =        8;  // 1 << 3; 0001000
   static const int MAR_DISP_LAYER_LAST_STD    =       16;  // 1 << 4; 0010000
   static const int MAR_DISP_LAYER_LAST_OTHER  =       32;  // 1 << 5; 0100000
-  static const int MAR_DISP_LAYER_LAST_SELECT =       64;  // 1 << 5; 1000000
+  static const int MAR_DISP_LAYER_LAST_SELECT =       64;  // 1 << 6; 1000000
 
   static const int CMD_WRD_FILTER             = 33;
   static const int CMD_WRD_FILTER_SY          =        1;  // 1 << 0; 000001 - SY
@@ -97,7 +93,7 @@ class S52 {
   static const int CMD_WRD_FILTER_AP          =       16;  // 1 << 4; 010000 - AP
   static const int CMD_WRD_FILTER_TX          =       32;  // 1 << 5; 100000 - TE & TX
 
-  S52() {}
+  S52() {}  // init
 
   Future<bool> initWS(var wsUri) {
     Completer completer = new Completer();
@@ -116,10 +112,10 @@ class S52 {
     if (null != _timer)
       return;
 
-    // call drawLast every second (1sec)
+    // call drawLast every second (1000ms)
     _timer = new Timer.periodic(new Duration(milliseconds: 1000), (timer) {
       if (false == _skipTimer) {
-        drawLast().then((ret) {});
+        drawLast();
       }
     });
   }
@@ -154,13 +150,12 @@ class S52 {
     //_skipTimer = false;
 
     if (true == _queue.isNotEmpty) {
-      Cmd cmd = _queue.removeFirst();
-      if (cmd._id != data["id"]) {
-        print('rcvMsg(): failed on key: cmd._id=${cmd._id} data_id=${data["id"]} [data:$data]');
+      Cmd cmd = _queue.firstWhere((c) => c._id == data["id"], orElse: () => null);
+
+      if (cmd == null) {
         throw "rcvMsg(): ID mismatch";
       }
 
-      // drawLas()
       _skipTimer = false;
 
       return cmd._completer.complete(data['result']);
@@ -181,23 +176,18 @@ class S52 {
     Cmd cmd = new Cmd(str, _id, completer);
     _queue.add(cmd);
 
-    if (_ws.bufferedAmount == 0) {
-      //_ws.send(str);
-      _ws.sendString(str);
-
-      // debug
-      //print('_sndMsg:$str');
-    } else {
-      print('_sndMsg: ERROR SOCK FAIL');
-    }
+    _ws.sendString(str);
 
     return completer.future;
   }
 
   /*
   // alternate way of calling libS52 - one call for all S52.h calls
+  // pro: less code
+  // con: lost of info .. doesn't mirror S52.h well since all call info would be
+  // littered across s52ui.dart
   Future<List> send(var cmdName, var params) {
-    _data["id"    ] = _id;
+    _data["id"    ] = id;
     _data["method"] = cmdName;
     _data["params"] = params;
     String jsonCmdstr = JSON.encode(_data);
@@ -206,10 +196,6 @@ class S52 {
   }
   */
 
-  ////////////////////// FIXME: REFACTOR use send() ///////////////////////////
-  // pro: less code
-  // con: lost of info .. doesn't mirror S52.h well since all call info would be
-  // littered across s52ui.dart
   Future<List> draw() {
     _data["id"    ] = id;
     _data["method"] = "S52_draw";
