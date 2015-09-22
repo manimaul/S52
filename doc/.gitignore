@@ -5,4 +5,5 @@ cvs_status.*
 *.o
 *.a
 tags
+.idea/
 
